@@ -9,7 +9,13 @@ from pathlib import Path
 import streamlit as st
 
 from alignment_prompts import ALIGNMENT_LABELS
-from config import llm_configured, resolve_llm_model, resolve_openai_api_key, resolve_sheet_defaults
+from config import (
+    api_provider_label,
+    llm_configured,
+    resolve_llm_model,
+    resolve_openai_api_key,
+    resolve_sheet_defaults,
+)
 from qc_engine import (
     CHANGE_TASK_MESSAGE,
     assess_task,
@@ -116,7 +122,10 @@ with st.expander("Settings (optional)", expanded=False):
 corpus_path = str(DEFAULT_CORPUS) if use_local_corpus and DEFAULT_CORPUS.exists() else ""
 
 if llm_ready:
-    st.caption(f"LLM judge: **primary layer** · model `{llm_model}` · key configured by admin")
+    provider = api_provider_label()
+    st.caption(
+        f"LLM judge: **primary layer** · provider **{provider}** · model `{llm_model}`"
+    )
 else:
     st.warning(
         "LLM judge is **not configured** on this deployment. "
@@ -167,6 +176,19 @@ if check_inst_btn:
                 api_key=resolve_openai_api_key(),
             )
         st.session_state.instruction_pre_text = instruction_text
+
+        if pre_result.get("embedding_ran"):
+            st.info(
+                f"✓ Embedding API ran: **{pre_result.get('embed_model', 'text-embedding-3-small')}** "
+                f"against **{pre_result.get('corpus_size', 0)}** tracker instructions"
+            )
+        elif pre_result.get("embedding_error"):
+            st.warning(f"Embedding did **not** run: {pre_result['embedding_error']}")
+        else:
+            st.warning(
+                "Embedding did **not** run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
+                "Only lexical word-overlap was checked."
+            )
 
         if pre_result.get("blocked"):
             st.session_state.instruction_pre_passed = False

@@ -31,6 +31,21 @@ class SimilarityHit:
     dual_block: bool = False
 
 
+@dataclass
+class SimilarityRunMeta:
+    api_key_present: bool
+    embedding_ran: bool
+    embed_model: str
+    embedding_error: str | None
+    corpus_size: int
+
+
+@dataclass
+class SimilarityCompareResult:
+    hits: list[SimilarityHit]
+    meta: SimilarityRunMeta
+
+
 def normalize_instruction_text(text: str) -> str:
     """Same normalization as Apps Script normalizeInstructionText_."""
     return (
@@ -66,15 +81,20 @@ def is_dual_duplicate(
     return lexical_score >= threshold and semantic_score >= threshold
 
 
-def _get_embeddings(texts: list[str], api_key: str, model: str = DEFAULT_EMBED_MODEL) -> list[list[float]]:
-    from openai import OpenAI
+def _get_embeddings(
+    texts: list[str],
+    api_key: str,
+    model: str | None = None,
+) -> list[list[float]]:
+    from config import build_openai_client, resolve_embed_model
 
-    client = OpenAI(api_key=api_key)
+    embed_model = model or resolve_embed_model(api_key)
+    client = build_openai_client(api_key)
     out: list[list[float]] = []
     batch_size = 60
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        resp = client.embeddings.create(model=model, input=batch)
+        resp = client.embeddings.create(model=embed_model, input=batch)
         out.extend([item.embedding for item in resp.data])
     return out
 
@@ -127,14 +147,42 @@ def compare_instruction_to_corpus(
     top_n: int = 10,
     threshold: float = INSTRUCTION_SIM_THRESHOLD,
 ) -> list[SimilarityHit]:
+    """Backward-compatible wrapper — returns ranked hits only."""
+    return compare_instruction_to_corpus_full(
+        query_instruction,
+        corpus,
+        exclude_keys=exclude_keys,
+        api_key=api_key,
+        top_n=top_n,
+        threshold=threshold,
+    ).hits
+
+
+def compare_instruction_to_corpus_full(
+    query_instruction: str,
+    corpus: dict[str, dict[str, str]],
+    exclude_keys: set[str] | None = None,
+    api_key: str = "",
+    top_n: int = 10,
+    threshold: float = INSTRUCTION_SIM_THRESHOLD,
+) -> SimilarityCompareResult:
     """
     Run lexical and embedding similarity in parallel against the full corpus.
-    Returns hits sorted by combined strength; dual_block=True only when BOTH >= threshold.
+    Always returns top-N rows with both scores visible (even below threshold).
+    dual_block=True only when BOTH lexical and embedding >= threshold.
     """
     exclude = exclude_keys or set()
     query = (query_instruction or "").strip()
+    api_key = (api_key or "").strip()
+    empty_meta = SimilarityRunMeta(
+        api_key_present=bool(api_key),
+        embedding_ran=False,
+        embed_model=DEFAULT_EMBED_MODEL,
+        embedding_error=None,
+        corpus_size=0,
+    )
     if not query or not corpus:
-        return []
+        return SimilarityCompareResult(hits=[], meta=empty_meta)
 
     candidates: list[tuple[str, dict[str, str]]] = []
     for key, meta in corpus.items():
@@ -145,30 +193,40 @@ def compare_instruction_to_corpus(
         candidates.append((key, meta))
 
     if not candidates:
-        return []
+        return SimilarityCompareResult(hits=[], meta=empty_meta)
 
     lexical_scores: dict[str, float] = {}
     semantic_scores: dict[str, float] = {}
+    embedding_error: str | None = None
+    embedding_ran = False
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         lex_future = executor.submit(_compute_lexical_scores, query, candidates)
         sem_future = executor.submit(_compute_semantic_scores, query, candidates, api_key)
         lexical_scores = lex_future.result()
-        try:
-            semantic_scores = sem_future.result()
-        except Exception:
-            semantic_scores = {}
+        if api_key:
+            try:
+                semantic_scores = sem_future.result()
+                embedding_ran = bool(semantic_scores)
+            except Exception as exc:
+                embedding_error = str(exc)
+                semantic_scores = {}
+        else:
+            embedding_error = "No OPENAI_API_KEY — embedding step skipped"
 
     hits: list[SimilarityHit] = []
     for key, meta in candidates:
         lex = lexical_scores.get(key, 0.0)
         sem = semantic_scores.get(key)
-        if lex < threshold and (sem is None or sem < threshold):
-            continue
         dual = is_dual_duplicate(lex, sem, threshold)
-        method = "lexical+semantic-dual" if dual else (
-            "semantic-only" if sem is not None and sem >= threshold else "lexical-only"
-        )
+        if dual:
+            method = "lexical+semantic-dual"
+        elif sem is not None and sem >= threshold:
+            method = "semantic-only"
+        elif lex >= threshold:
+            method = "lexical-only"
+        else:
+            method = "below-threshold"
         hits.append(
             SimilarityHit(
                 task_key=key,
@@ -184,12 +242,21 @@ def compare_instruction_to_corpus(
     hits.sort(
         key=lambda h: (
             h.dual_block,
-            h.semantic_score or 0,
+            h.semantic_score if h.semantic_score is not None else -1.0,
             h.lexical_score,
         ),
         reverse=True,
     )
-    return hits[:top_n]
+    from config import resolve_embed_model
+
+    meta = SimilarityRunMeta(
+        api_key_present=bool(api_key),
+        embedding_ran=embedding_ran,
+        embed_model=resolve_embed_model(api_key),
+        embedding_error=embedding_error,
+        corpus_size=len(candidates),
+    )
+    return SimilarityCompareResult(hits=hits[:top_n], meta=meta)
 
 
 def tfidf_similarity(

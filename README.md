@@ -44,18 +44,32 @@ Default model: **`gpt-4.1`** (configurable — see below).
 1. Push this repo to GitHub (see **Publish to GitHub** below)
 2. Go to [share.streamlit.io](https://share.streamlit.io) → New app
 3. Point to repo, set **Main file path**: `app.py`
-4. **App Settings → Secrets** — paste:
+4. **App Settings → Secrets** — paste one of:
 
+**OpenAI direct:**
 ```toml
-OPENAI_API_KEY = "sk-your-key-here"
+OPENAI_API_KEY = "sk-..."
 QC_LLM_MODEL = "gpt-4.1"
+QC_EMBED_MODEL = "text-embedding-3-small"
+```
 
+**OpenRouter (`sk-or-v1...` keys):**
+```toml
+OPENROUTER_API_KEY = "sk-or-v1-..."
+OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
+QC_LLM_MODEL = "openai/gpt-4.1"
+QC_EMBED_MODEL = "openai/text-embedding-3-small"
+```
+
+Plus sheet block (pre-filled in `secrets.toml.example`):
+```toml
 [sheet]
-url = "https://docs.google.com/spreadsheets/d/YOUR_ID/edit"
-worksheet = "Sheet1"
-task_col = "task_name"
-instruction_col = "instruction"
-spec_col = "spec"
+url = "https://docs.google.com/spreadsheets/d/1XR_EFXtUt4GQ_d6zlkPT4arZi-BG-zFGHx4ctSSG51s/edit"
+worksheet = "May 1st - 31st"
+task_col = "Task Name"
+instruction_col = "Task Instruction"
+trainer_col = "Trainer Name"
+instruction_col_index = "16"
 ```
 
 5. Deploy → share the public URL with trainers

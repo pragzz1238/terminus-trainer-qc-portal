@@ -21,7 +21,13 @@ from alignment_prompts import (
     ALIGNMENT_LABELS,
     ACCEPTED_TASK_NAMES,
 )
-from config import resolve_llm_model, resolve_openai_api_key
+from config import (
+    api_provider_label,
+    build_openai_client,
+    resolve_embed_model,
+    resolve_llm_model,
+    resolve_openai_api_key,
+)
 
 VALID_SUBCATS = {
     "api_integration",
@@ -637,17 +643,26 @@ def run_instruction_similarity(
     corpus_meta: dict[str, dict[str, str]] | None = None,
     exclude_task_name: str = "",
     api_key: str = "",
-) -> tuple[list[SimilarityMatch], bool, str, list[str]]:
+) -> tuple[list[SimilarityMatch], bool, str, list[str], dict[str, Any]]:
     """Parallel lexical + embedding check. Block only when both >= 60%."""
-    from similarity_engine import compare_instruction_to_corpus
+    from similarity_engine import compare_instruction_to_corpus_full
 
     notes: list[str] = []
+    api_key = (api_key or "").strip()
+    run_meta: dict[str, Any] = {
+        "embedding_ran": False,
+        "embed_model": resolve_embed_model(api_key),
+        "embedding_error": None,
+        "api_key_present": bool(api_key),
+        "api_provider": api_provider_label(api_key),
+        "corpus_size": 0,
+    }
     inst_text = (instruction_text or "").strip()
     if not inst_text:
-        return [], False, "Task Instruction is required.", notes
+        return [], False, "Task Instruction is required.", notes, run_meta
     if not instructions_corpus:
         notes.append("Instruction similarity skipped — no reference corpus")
-        return [], False, "", notes
+        return [], False, "", notes, run_meta
 
     meta = corpus_meta or {
         k: {"instruction": v, "trainer": "", "task_name": k}
@@ -655,9 +670,30 @@ def run_instruction_similarity(
     }
     exclude = {k for k in meta if exclude_task_name.lower() in k.lower()}
 
-    hits = compare_instruction_to_corpus(
+    result = compare_instruction_to_corpus_full(
         inst_text, meta, exclude_keys=exclude, api_key=api_key, top_n=10,
     )
+    hits = result.hits
+    sim_meta = result.meta
+    run_meta = {
+        "embedding_ran": sim_meta.embedding_ran,
+        "embed_model": sim_meta.embed_model,
+        "embedding_error": sim_meta.embedding_error,
+        "api_key_present": sim_meta.api_key_present,
+        "api_provider": api_provider_label(api_key),
+        "corpus_size": sim_meta.corpus_size,
+    }
+
+    if sim_meta.embedding_ran:
+        notes.append(
+            f"Embedding check ran via {run_meta['api_provider']}: {sim_meta.embed_model} "
+            f"({sim_meta.corpus_size} tracker instructions)"
+        )
+    elif sim_meta.embedding_error:
+        notes.append(f"Embedding check did NOT run: {sim_meta.embedding_error}")
+    else:
+        notes.append("Embedding check did NOT run (no API key)")
+
     inst_matches = [
         SimilarityMatch(
             task_id=h.task_key,
@@ -683,20 +719,21 @@ def run_instruction_similarity(
             f"embedding {round((top.semantic_score or 0) * 100)}%."
         )
         notes.append(block_message)
-    elif hits:
+    elif hits and sim_meta.embedding_ran:
+        top = hits[0]
         notes.append(
-            f"Instruction similarity: top hit {hits[0].method} "
-            f"(lexical {round(hits[0].lexical_score * 100)}%, "
-            f"embedding {round((hits[0].semantic_score or 0) * 100)}%)"
+            f"Top match — lexical {round(top.lexical_score * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}% "
+            f"(dual block needs both ≥ 60%)"
         )
-    elif api_key:
-        notes.append("Instruction similarity: no rows above 60% on either check")
-    else:
+    elif hits:
+        top = hits[0]
         notes.append(
-            "Instruction similarity: lexical only (no API key for embeddings)"
+            f"Top match — lexical {round(top.lexical_score * 100)}% only "
+            f"(embedding unavailable)"
         )
 
-    return inst_matches, blocked, block_message, notes
+    return inst_matches, blocked, block_message, notes, run_meta
 
 
 def check_instruction_similarity(
@@ -722,7 +759,7 @@ def check_instruction_similarity(
         corpus_json_path=corpus_json_path,
     )
     api_key = api_key.strip() or resolve_openai_api_key()
-    matches, blocked, block_message, notes = run_instruction_similarity(
+    matches, blocked, block_message, notes, run_meta = run_instruction_similarity(
         instruction_text,
         instructions,
         corpus_meta=corpus_meta,
@@ -730,14 +767,39 @@ def check_instruction_similarity(
         api_key=api_key,
     )
     notes = load_notes + notes
+
+    if blocked:
+        pass_message = block_message
+    elif run_meta.get("embedding_ran") and matches:
+        top = matches[0]
+        pass_message = (
+            f"No change needed — top match lexical {round((top.lexical_score or 0) * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}% "
+            f"(via {run_meta.get('embed_model', 'text-embedding-3-small')}; "
+            f"dual block requires both ≥ 60%)."
+        )
+    elif run_meta.get("embedding_ran"):
+        pass_message = (
+            f"Embedding ran ({run_meta.get('embed_model')}) but no tracker rows matched."
+        )
+    elif matches:
+        pass_message = (
+            "Lexical check only — embedding did NOT run. "
+            "Configure OPENAI_API_KEY in Streamlit secrets for full dual check."
+        )
+    else:
+        pass_message = "No tracker instructions loaded to compare against."
+
     return {
         "blocked": blocked,
-        "message": block_message or (
-            "No dual-block match (both lexical and embedding below 60%, or only one cleared 60%)."
-        ),
+        "message": pass_message,
         "matches": matches,
         "notes": notes,
         "change_task": blocked,
+        "embedding_ran": run_meta.get("embedding_ran", False),
+        "embed_model": run_meta.get("embed_model", "text-embedding-3-small"),
+        "embedding_error": run_meta.get("embedding_error"),
+        "corpus_size": run_meta.get("corpus_size", 0),
     }
 
 
@@ -761,7 +823,7 @@ def run_similarity_checks(
         notes.append("Similarity skipped — no reference corpus provided")
         return [], [], 0.0, False, "", notes
 
-    inst_matches, blocked, block_message, inst_notes = run_instruction_similarity(
+    inst_matches, blocked, block_message, inst_notes, _ = run_instruction_similarity(
         inst_text,
         instructions_corpus,
         corpus_meta=corpus_meta,
@@ -871,7 +933,7 @@ def run_llm_judge(
         return {}, None, notes
 
     try:
-        from openai import OpenAI
+        build_openai_client(api_key)
     except ImportError as exc:
         notes.append(f"LLM judge skipped — openai package missing: {exc}")
         return {}, None, notes
@@ -901,8 +963,9 @@ def run_llm_judge(
         "task_toml": task_toml,
     }
 
-    llm_model = model or resolve_llm_model()
-    client = OpenAI(api_key=api_key)
+    llm_model = model or resolve_llm_model(api_key)
+    client = build_openai_client(api_key)
+    provider = api_provider_label(api_key)
     results: dict[str, Any] = {}
     reject_count = 0
     needs_work_count = 0
@@ -947,8 +1010,8 @@ def run_llm_judge(
             notes.append(f"LLM alignment check failed for {key}: {exc}")
 
     notes.append(
-        f"LLM alignment judge completed ({llm_model}): {len(ALIGNMENT_CHECKS)} checks, "
-        f"{reject_count} rejects, {needs_work_count} needs-work"
+        f"LLM alignment judge completed via {provider} ({llm_model}): "
+        f"{len(ALIGNMENT_CHECKS)} checks, {reject_count} rejects, {needs_work_count} needs-work"
     )
     llm_pass = reject_count == 0 and needs_work_count == 0
     return results, llm_pass, notes
