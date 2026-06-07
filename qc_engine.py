@@ -55,8 +55,8 @@ SIM_THRESHOLD_WARN = INSTRUCTION_SIM_WARN
 SIM_THRESHOLD_BLOCK = INSTRUCTION_SIM_BLOCK
 BUNDLED_CORPUS_PATH = Path(__file__).resolve().parent / "terminus_task_corpus.json"
 CHANGE_TASK_MESSAGE = (
-    "Change the task — instruction is too similar to an existing task "
-    "(both lexical and embedding checks are at or above 60%)."
+    "Change the task — your instruction is too similar to an existing one "
+    "(word overlap and meaning are both at or above 60%)."
 )
 
 
@@ -753,22 +753,22 @@ def run_instruction_similarity(
         block_message = (
             f"{CHANGE_TASK_MESSAGE} Closest match: {top.task_id}"
             f" (trainer: {top.trainer or 'unknown'}) — "
-            f"lexical {round(top.lexical_score * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}%."
+            f"word overlap {round(top.lexical_score * 100)}%, "
+            f"meaning {round((top.semantic_score or 0) * 100)}%."
         )
         notes.append(block_message)
     elif hits and sim_meta.embedding_ran:
         top = hits[0]
         notes.append(
-            f"Top match — lexical {round(top.lexical_score * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}% "
-            f"(dual block needs both ≥ 60%)"
+            f"Top match — word overlap {round(top.lexical_score * 100)}%, "
+            f"meaning {round((top.semantic_score or 0) * 100)}% "
+            f"(blocked only when both ≥ 60%)"
         )
     elif hits:
         top = hits[0]
         notes.append(
-            f"Top match — lexical {round(top.lexical_score * 100)}% only "
-            f"(embedding unavailable)"
+            f"Top match — word overlap {round(top.lexical_score * 100)}% only "
+            f"(meaning check unavailable)"
         )
 
     return inst_matches, blocked, block_message, notes, run_meta
@@ -811,19 +811,19 @@ def check_instruction_similarity(
     elif run_meta.get("embedding_ran") and matches:
         top = matches[0]
         pass_message = (
-            f"No change needed — top match lexical {round((top.lexical_score or 0) * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}% "
-            f"(via {run_meta.get('embed_model', 'text-embedding-3-small')}; "
-            f"dual block requires both ≥ 60%)."
+            f"Looks good — closest match has word overlap "
+            f"{round((top.lexical_score or 0) * 100)}% and meaning "
+            f"{round((top.semantic_score or 0) * 100)}% "
+            f"(blocked only when both reach 60%)."
         )
     elif run_meta.get("embedding_ran"):
         pass_message = (
-            f"Embedding ran ({run_meta.get('embed_model')}) but no tracker rows matched."
+            "Meaning check ran but no close matches on the tracker."
         )
     elif matches:
         pass_message = (
-            "Lexical check only — embedding did NOT run. "
-            "Configure OPENAI_API_KEY in Streamlit secrets for full dual check."
+            "Word-overlap check only — meaning check did not run. "
+            "Configure OPENAI_API_KEY in Streamlit secrets for the full comparison."
         )
     elif not instructions:
         sheet_errors = [n for n in load_notes if "failed" in n.lower() or "returned" in n.lower()]

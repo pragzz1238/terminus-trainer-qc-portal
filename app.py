@@ -43,6 +43,16 @@ from ui_components import (
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CORPUS = APP_DIR / "terminus_task_corpus.json"
+SIM_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
+INSTRUCTION_CHECK_HELP = (
+    f"Compare your instruction against the team tracker. You'll be blocked only if "
+    f"it's too similar to an existing task on both word overlap and meaning "
+    f"(both ≥ {SIM_PCT}%)."
+)
+SIMILARITY_TAB_HELP = (
+    f"Checked before upload and again from your zip. Change task only when word overlap "
+    f"and meaning are both ≥ {SIM_PCT}%."
+)
 
 st.set_page_config(
     page_title="Terminus QC · Task Checker",
@@ -128,8 +138,7 @@ with st.container(border=True):
     render_panel_header(
         0,
         "Instruction similarity check",
-        f"Run lexical and embedding comparison in parallel against the team tracker. "
-        f"Dual block when both scores reach {int(INSTRUCTION_SIM_THRESHOLD * 100)}% on the same row.",
+        INSTRUCTION_CHECK_HELP,
     )
 
     inst_file = st.file_uploader(
@@ -154,7 +163,7 @@ if check_inst_btn:
     if not instruction_text:
         st.error("Paste or upload your instruction before checking.")
     else:
-        with st.spinner("Running parallel lexical + embedding check against tracker sheet…"):
+        with st.spinner("Comparing your instruction against the team tracker…"):
             pre_result = check_instruction_similarity(
                 instruction_text=instruction_text,
                 sheet_url=sheet_url,
@@ -171,22 +180,21 @@ if check_inst_btn:
 
         if pre_result.get("embedding_ran"):
             st.info(
-                f"✓ Embedding API ran ({pre_result.get('api_provider', 'OpenAI')}): "
-                f"**{pre_result.get('embed_model', 'text-embedding-3-small')}** "
-                f"against **{pre_result.get('corpus_size', 0)}** tracker instructions"
+                f"Meaning check completed ({pre_result.get('api_provider', 'OpenAI')}) "
+                f"against **{pre_result.get('corpus_size', 0)}** tracker instructions."
             )
         elif pre_result.get("embedding_error"):
-            st.warning(f"Embedding did **not** run: {pre_result['embedding_error']}")
+            st.warning(f"Meaning check did not run: {pre_result['embedding_error']}")
         elif not pre_result.get("api_key_present") and not llm_ready:
             st.warning(
-                "Embedding did **not** run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
-                "Only lexical word-overlap was checked."
+                "Meaning check did not run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
+                "Only word-overlap was checked."
             )
         elif not pre_result.get("api_key_present"):
-            st.warning("API key missing for embedding step (LLM may still work on zip QC).")
+            st.warning("API key missing for meaning check (full zip QC may still work).")
         else:
             st.warning(
-                "Embedding step did not complete — see **Sheet load details** and download the report below."
+                "Meaning check did not complete — see **Sheet load details** and download the report below."
             )
 
         corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
@@ -214,13 +222,12 @@ if check_inst_btn:
                     {
                         "Task": m.task_id,
                         "Trainer": m.trainer or "—",
-                        "Lexical %": round((m.lexical_score or 0) * 100, 1),
-                        "Embedding %": (
+                        "Word overlap %": round((m.lexical_score or 0) * 100, 1),
+                        "Meaning %": (
                             round(m.semantic_score * 100, 1)
                             if m.semantic_score is not None else "—"
                         ),
-                        "Change task?": "YES" if m.dual_block else "No",
-                        "Method": m.method,
+                        "Too similar?": "YES" if m.dual_block else "No",
                     }
                     for m in pre_result["matches"]
                 ],
@@ -239,7 +246,7 @@ if check_inst_btn:
             "instruction_precheck_report.html",
             "instruction_precheck_report.json",
             title="Instruction pre-check report",
-            subtitle="Similarity matches, embedding status, and sheet-load diagnostics.",
+            subtitle="Top matches, meaning-check status, and tracker load details.",
             key_prefix="dl_pre",
         )
 
@@ -252,12 +259,12 @@ elif st.session_state.instruction_pre_result:
                 {
                     "Task": m.task_id,
                     "Trainer": m.trainer or "—",
-                    "Lexical %": round((m.lexical_score or 0) * 100, 1),
-                    "Embedding %": (
+                    "Word overlap %": round((m.lexical_score or 0) * 100, 1),
+                    "Meaning %": (
                         round(m.semantic_score * 100, 1)
                         if m.semantic_score is not None else "—"
                     ),
-                    "Change task?": "YES" if m.dual_block else "No",
+                    "Too similar?": "YES" if m.dual_block else "No",
                 }
                 for m in pre_result["matches"]
             ],
@@ -337,7 +344,7 @@ if run_qc:
         pct = int((current - 1) / total * 80) + 15
         progress.progress(min(pct, 95), text=f"LLM check {current}/{total}: {label} ({model})…")
 
-    progress.progress(3, text="Checking instruction.md from zip (parallel lexical + embedding)…")
+    progress.progress(3, text="Checking instruction.md from your zip against the team tracker…")
 
     with status.container():
         with st.spinner("Running assessment — instruction first, then static, then LLM judge…"):
@@ -498,11 +505,7 @@ with tab_llm:
                     st.warning("Flags: " + ", ".join(k for k, _ in flags))
 
 with tab_similarity:
-    st.caption(
-        f"Check #1: pre-upload instruction · Check #2: instruction.md from zip. "
-        f"Parallel lexical + embedding — **change task** only when **both** ≥ "
-        f"**{int(INSTRUCTION_SIM_THRESHOLD * 100)}%**."
-    )
+    st.caption(SIMILARITY_TAB_HELP)
     if report.instruction_matches:
         st.markdown("**instruction.md vs team tracker sheet**")
         st.dataframe(
@@ -510,13 +513,12 @@ with tab_similarity:
                 {
                     "Task": m.task_id,
                     "Trainer": m.trainer or "—",
-                    "Lexical %": round((m.lexical_score or 0) * 100, 1),
-                    "Embedding %": (
+                    "Word overlap %": round((m.lexical_score or 0) * 100, 1),
+                    "Meaning %": (
                         round(m.semantic_score * 100, 1)
                         if m.semantic_score is not None else "—"
                     ),
-                    "Change task?": "YES" if m.dual_block else "No",
-                    "Method": m.method,
+                    "Too similar?": "YES" if m.dual_block else "No",
                 }
                 for m in report.instruction_matches
             ],
