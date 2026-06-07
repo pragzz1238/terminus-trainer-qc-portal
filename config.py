@@ -23,10 +23,10 @@ def _get_secrets() -> dict[str, Any]:
 def resolve_openai_api_key() -> str:
     secrets = _get_secrets()
     return (
-        secrets.get("OPENROUTER_API_KEY", "")
-        or secrets.get("OPENAI_API_KEY", "")
-        or os.environ.get("OPENROUTER_API_KEY", "")
+        secrets.get("OPENAI_API_KEY", "")
+        or secrets.get("OPENROUTER_API_KEY", "")
         or os.environ.get("OPENAI_API_KEY", "")
+        or os.environ.get("OPENROUTER_API_KEY", "")
     ).strip()
 
 
@@ -40,6 +40,8 @@ def _explicit_base_url() -> str:
 
 def uses_openrouter(api_key: str = "") -> bool:
     key = (api_key or resolve_openai_api_key()).strip()
+    if key.startswith("sk-") and not key.startswith("sk-or-"):
+        return False
     if key.startswith("sk-or-"):
         return True
     return "openrouter.ai" in _explicit_base_url()

@@ -44,24 +44,17 @@ Default model: **`gpt-4.1`** (configurable — see below).
 1. Push this repo to GitHub (see **Publish to GitHub** below)
 2. Go to [share.streamlit.io](https://share.streamlit.io) → New app
 3. Point to repo, set **Main file path**: `app.py`
-4. **App Settings → Secrets** — paste one of:
+4. **App Settings → Secrets** — paste (replace with your real key):
 
-**OpenAI direct:**
 ```toml
-OPENAI_API_KEY = "sk-..."
-QC_LLM_MODEL = "gpt-4.1"
+OPENAI_API_KEY = "sk-proj-..."
+QC_LLM_MODEL = "gpt-5.2"
 QC_EMBED_MODEL = "text-embedding-3-small"
 ```
 
-**OpenRouter (`sk-or-v1...` keys):**
-```toml
-OPENROUTER_API_KEY = "sk-or-v1-..."
-OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
-QC_LLM_MODEL = "openai/gpt-4.1"
-QC_EMBED_MODEL = "openai/text-embedding-3-small"
-```
+Remove any `OPENROUTER_API_KEY` or `OPENAI_BASE_URL` lines if you switched back from OpenRouter.
 
-Plus sheet block (pre-filled in `secrets.toml.example`):
+Plus sheet block:
 ```toml
 [sheet]
 url = "https://docs.google.com/spreadsheets/d/1XR_EFXtUt4GQ_d6zlkPT4arZi-BG-zFGHx4ctSSG51s/edit"
@@ -87,8 +80,9 @@ streamlit run app.py
 Or use environment variables (no file):
 
 ```bash
-export OPENAI_API_KEY="sk-..."
-export QC_LLM_MODEL="gpt-4.1"    # or gpt-5.1 if you have access
+export OPENAI_API_KEY="sk-proj-..."
+export QC_LLM_MODEL="gpt-5.2"
+export QC_EMBED_MODEL="text-embedding-3-small"
 streamlit run app.py
 ```
 
