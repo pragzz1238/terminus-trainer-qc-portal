@@ -26,54 +26,32 @@ from qc_engine import (
     report_to_dict,
 )
 from tracker_defaults import INSTRUCTION_SIM_THRESHOLD
+from ui_components import (
+    inject_global_css,
+    llm_verdict_label,
+    render_download_panel,
+    render_panel_header,
+    render_footer,
+    render_hero,
+    render_metric_grid,
+    render_topbar,
+    render_verdict_banner,
+    render_section_header,
+    render_workflow_stepper,
+    severity_badge,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CORPUS = APP_DIR / "terminus_task_corpus.json"
 
 st.set_page_config(
-    page_title="Terminus QC Portal",
-    page_icon="🛡️",
+    page_title="Terminus QC · Task Checker",
+    page_icon="📋",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-st.markdown(
-    """
-<style>
-    .block-container { padding-top: 1.5rem; max-width: 1100px; }
-    .hero {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-        color: white; padding: 2rem 2.5rem; border-radius: 16px;
-        margin-bottom: 1.5rem;
-    }
-    .hero h1 { color: white; font-size: 2rem; margin: 0 0 0.5rem 0; }
-    .hero p { color: #c8d6e5; margin: 0; font-size: 1.05rem; }
-    .step-card {
-        background: #f8f9fb; border: 1px solid #e2e8f0;
-        border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem;
-    }
-    .verdict-pass { color: #16a34a; font-weight: 700; font-size: 1.4rem; }
-    .verdict-fail { color: #dc2626; font-weight: 700; font-size: 1.4rem; }
-    .metric-box {
-        background: white; border: 1px solid #e2e8f0; border-radius: 10px;
-        padding: 1rem; text-align: center;
-    }
-    .metric-box .label { color: #64748b; font-size: 0.85rem; text-transform: uppercase; }
-    .metric-box .value { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
-    .download-banner {
-        background: linear-gradient(135deg, #eff6ff 0%, #ecfdf5 100%);
-        border: 2px solid #2563eb;
-        border-radius: 14px;
-        padding: 1.25rem 1.5rem;
-        margin: 1.25rem 0 1rem 0;
-    }
-    .download-banner h3 { margin: 0 0 0.35rem 0; color: #1e3a8a; font-size: 1.15rem; }
-    .download-banner p { margin: 0; color: #475569; font-size: 0.95rem; }
-    div[data-testid="stSidebar"] { display: none; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+inject_global_css()
 
 sheet_defaults = resolve_sheet_defaults()
 llm_model = resolve_llm_model()
@@ -89,72 +67,29 @@ if "instruction_pre_result" not in st.session_state:
 if "qc_cache" not in st.session_state:
     st.session_state.qc_cache = None
 
+provider = api_provider_label() if llm_ready else "—"
+render_topbar(llm_ready, provider, llm_model)
+render_hero()
+render_workflow_stepper(0 if not st.session_state.instruction_pre_passed else 1)
 
-def _kb(size_bytes: int) -> str:
-    return f"{max(size_bytes / 1024, 0.1):.1f} KB"
-
-
-def _render_download_panel(
-    html_data: str,
-    json_data: str,
-    html_filename: str,
-    json_filename: str,
-    *,
-    title: str = "Download your reports",
-    subtitle: str = "Save and share — HTML for reviewers, JSON for tooling.",
-    key_prefix: str = "dl",
-) -> None:
-    html_size = _kb(len(html_data.encode("utf-8")))
-    json_size = _kb(len(json_data.encode("utf-8")))
-    st.markdown(
-        f"""
-<div class="download-banner">
-  <h3>📥 {title}</h3>
-  <p>{subtitle}</p>
-</div>
-""",
-        unsafe_allow_html=True,
+meta_left, meta_right = st.columns([2, 1])
+with meta_left:
+    trainer_name = st.text_input(
+        "Trainer name",
+        placeholder="Optional — included on exported reports",
+        label_visibility="visible",
     )
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button(
-            f"📄 Download HTML ({html_size})",
-            data=html_data,
-            file_name=html_filename,
-            mime="text/html",
-            use_container_width=True,
-            type="primary",
-            key=f"{key_prefix}_html",
-            help="Full formatted report — open in any browser",
+with meta_right:
+    if llm_ready:
+        st.markdown(
+            '<p style="margin:1.6rem 0 0 0;color:#64748b;font-size:0.85rem;">'
+            f"LLM judge enabled · <code>{llm_model}</code></p>",
+            unsafe_allow_html=True,
         )
-        st.caption(f"`{html_filename}`")
-    with d2:
-        st.download_button(
-            f"📋 Download JSON ({json_size})",
-            data=json_data,
-            file_name=json_filename,
-            mime="application/json",
-            use_container_width=True,
-            type="primary",
-            key=f"{key_prefix}_json",
-            help="Machine-readable — all scores, LLM gaps, similarity matches",
-        )
-        st.caption(f"`{json_filename}`")
+    else:
+        st.warning("LLM judge unavailable — configure API key in deployment secrets.")
 
-st.markdown(
-    """
-<div class="hero">
-  <h1>🛡️ Terminus Task QC Portal</h1>
-  <p>Check <strong>instruction.md first</strong> → upload zip → LLM alignment judge (primary).
-  Compared against <strong>8 accepted reference tasks</strong> + team tracker sheet.</p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-trainer_name = st.text_input("Your name", placeholder="Optional — appears on the QC report")
-
-with st.expander("Settings (optional)", expanded=False):
+with st.expander("Assessment settings", expanded=False):
     run_llm = st.checkbox("Run LLM alignment judge (primary)", value=True, disabled=not llm_ready)
     if sheet_preconfigured:
         st.caption(
@@ -188,43 +123,32 @@ with st.expander("Settings (optional)", expanded=False):
 
 corpus_path = str(DEFAULT_CORPUS) if use_local_corpus and DEFAULT_CORPUS.exists() else ""
 
-if llm_ready:
-    provider = api_provider_label()
-    st.caption(
-        f"LLM judge: **primary layer** · provider **{provider}** · model `{llm_model}`"
-    )
-else:
-    st.warning(
-        "LLM judge is **not configured** on this deployment. "
-        "Static + similarity checks will still run. Contact your team lead."
-    )
-
 # ── Step 0: Instruction pre-check (before zip) ─────────────────────────────
-st.markdown('<div class="step-card">', unsafe_allow_html=True)
-st.markdown("### Step 0 — Check instruction.md first")
-st.caption(
-    f"Lexical and embedding run **in parallel**. "
-    f"If **both** are ≥ **{int(INSTRUCTION_SIM_THRESHOLD * 100)}%** on the same task → change the task."
-)
+with st.container(border=True):
+    render_panel_header(
+        0,
+        "Instruction similarity check",
+        f"Run lexical and embedding comparison in parallel against the team tracker. "
+        f"Dual block when both scores reach {int(INSTRUCTION_SIM_THRESHOLD * 100)}% on the same row.",
+    )
 
-inst_file = st.file_uploader(
-    "Upload instruction.md (optional)",
-    type=["md"],
-    key="instruction_only",
-)
-inst_text_area = st.text_area(
-    "Or paste your instruction text",
-    value=st.session_state.instruction_pre_text,
-    height=160,
-    placeholder="Paste the full instruction.md content here…",
-)
+    inst_file = st.file_uploader(
+        "Upload instruction.md (optional)",
+        type=["md"],
+        key="instruction_only",
+    )
+    inst_text_area = st.text_area(
+        "Or paste your instruction text",
+        value=st.session_state.instruction_pre_text,
+        height=160,
+        placeholder="Paste the full instruction.md content here…",
+    )
 
-instruction_text = inst_text_area.strip()
-if inst_file is not None:
-    instruction_text = inst_file.getvalue().decode("utf-8", errors="replace").strip()
+    instruction_text = inst_text_area.strip()
+    if inst_file is not None:
+        instruction_text = inst_file.getvalue().decode("utf-8", errors="replace").strip()
 
-check_inst_btn = st.button("Check Instruction First", type="primary", use_container_width=True)
-st.markdown("</div>", unsafe_allow_html=True)
+    check_inst_btn = st.button("Run instruction check", type="primary", use_container_width=True)
 
 if check_inst_btn:
     if not instruction_text:
@@ -309,13 +233,13 @@ if check_inst_btn:
             instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
             indent=2,
         )
-        _render_download_panel(
+        render_download_panel(
             pre_html,
             pre_json,
             "instruction_precheck_report.html",
             "instruction_precheck_report.json",
-            title="Download instruction pre-check report",
-            subtitle="Similarity matches, embedding status, and diagnostics.",
+            title="Instruction pre-check report",
+            subtitle="Similarity matches, embedding status, and sheet-load diagnostics.",
             key_prefix="dl_pre",
         )
 
@@ -349,31 +273,34 @@ elif st.session_state.instruction_pre_result:
         ),
         indent=2,
     )
-    _render_download_panel(
+    render_download_panel(
         pre_html,
         pre_json,
         "instruction_precheck_report.html",
         "instruction_precheck_report.json",
-        title="Download instruction pre-check report",
-        subtitle="From your last instruction check.",
+        title="Instruction pre-check report",
+        subtitle="From your most recent instruction check.",
         key_prefix="dl_pre_persist",
     )
 
 if st.session_state.instruction_pre_passed:
-    st.success("✓ Instruction pre-check passed — you can upload your task zip below.")
+    st.success("Instruction check passed — proceed to task zip upload.")
 elif instruction_text and not check_inst_btn:
-    st.info("Run **Check Instruction First** before uploading your zip.")
+    st.info("Run the instruction check before uploading your task zip.")
 
 # ── Step 1: Zip upload ────────────────────────────────────────────────────
-st.markdown('<div class="step-card">', unsafe_allow_html=True)
-st.markdown("### Step 1 — Upload your task zip")
-uploaded = st.file_uploader(
-    "Drop your `.zip` here",
-    type=["zip"],
-    label_visibility="collapsed",
-    disabled=not st.session_state.instruction_pre_passed,
-)
-st.markdown("</div>", unsafe_allow_html=True)
+render_workflow_stepper(1)
+with st.container(border=True):
+    render_panel_header(
+        1,
+        "Upload task archive",
+        "Submit your Terminal-Bench task as a .zip after the instruction check passes.",
+    )
+    uploaded = st.file_uploader(
+        "Task zip file",
+        type=["zip"],
+        disabled=not st.session_state.instruction_pre_passed,
+    )
 
 if not st.session_state.instruction_pre_passed:
     st.stop()
@@ -389,24 +316,18 @@ if (
 ):
     st.session_state.qc_cache = None
 
-fcol1, fcol2, fcol3 = st.columns(3)
-fcol1.markdown(
-    f'<div class="metric-box"><div class="label">File</div><div class="value" style="font-size:1rem">'
-    f"{uploaded.name}</div></div>",
-    unsafe_allow_html=True,
-)
-fcol2.markdown(
-    f'<div class="metric-box"><div class="label">Size</div>'
-    f'<div class="value">{uploaded.size / 1024:.0f} KB</div></div>',
-    unsafe_allow_html=True,
-)
-fcol3.markdown(
-    f'<div class="metric-box"><div class="label">References</div>'
-    f'<div class="value">8 accepted</div></div>',
-    unsafe_allow_html=True,
-)
-
-run_qc = st.button("Run Full QC Assessment", type="primary", use_container_width=True)
+with st.container(border=True):
+    render_panel_header(
+        1,
+        "Run assessment",
+        "Execute static checks, tracker similarity, and LLM alignment against 8 accepted references.",
+    )
+    render_metric_grid([
+        ("Archive", uploaded.name, "neutral"),
+        ("Size", f"{uploaded.size / 1024:.0f} KB", "neutral"),
+        ("References", "8 accepted", "neutral"),
+    ])
+    run_qc = st.button("Run full QC assessment", type="primary", use_container_width=True)
 
 if run_qc:
     progress = st.progress(0, text="Starting assessment…")
@@ -468,55 +389,41 @@ else:
     report_html = st.session_state.qc_cache["report_html"]
     safe_name = st.session_state.qc_cache["safe_name"]
 
-st.markdown("---")
-st.markdown("### Step 2 — Results")
+render_workflow_stepper(2)
+render_section_header(
+    2,
+    "Assessment results",
+    "Summary of instruction similarity, static checks, and LLM alignment against accepted references.",
+)
 
 if report.instruction_blocked:
     st.error(report.instruction_block_message or CHANGE_TASK_MESSAGE)
 
-verdict_class = "verdict-pass" if report.overall_pass else "verdict-fail"
-verdict_text = "READY TO SUBMIT" if report.overall_pass else "NEEDS FIXES"
-verdict_icon = "✅" if report.overall_pass else "❌"
-st.markdown(
-    f'<p class="{verdict_class}">{verdict_icon} {verdict_text}</p>',
-    unsafe_allow_html=True,
-)
+hint = ""
 if report.llm_results and not report.overall_pass and report.llm_pass is False:
-    st.caption("LLM alignment judge is the **primary** gate — fix alignment issues first.")
+    hint = "LLM alignment is the primary gate — address alignment gaps before resubmitting."
+render_verdict_banner(report.overall_pass, hint)
 
-m1, m2, m3, m4 = st.columns(4)
-m1.markdown(
-    f'<div class="metric-box"><div class="label">Task</div>'
-    f'<div class="value" style="font-size:1.1rem">{report.task_name}</div></div>',
-    unsafe_allow_html=True,
-)
-m2.markdown(
-    f'<div class="metric-box"><div class="label">Instruction</div>'
-    f'<div class="value">{"BLOCK" if report.instruction_blocked else "OK"}</div></div>',
-    unsafe_allow_html=True,
-)
-m3.markdown(
-    f'<div class="metric-box"><div class="label">LLM Align</div>'
-    f'<div class="value">'
-    f'{"SKIPPED" if not report.llm_results else ("PASS" if report.llm_pass else "FAIL")}'
-    f'</div></div>',
-    unsafe_allow_html=True,
-)
-m4.markdown(
-    f'<div class="metric-box"><div class="label">Static</div>'
-    f'<div class="value">{"PASS" if report.static_pass else "FAIL"}</div></div>',
-    unsafe_allow_html=True,
-)
+inst_tone = "fail" if report.instruction_blocked else "pass"
+llm_val = "SKIPPED" if not report.llm_results else ("PASS" if report.llm_pass else "FAIL")
+llm_tone = "neutral" if not report.llm_results else ("pass" if report.llm_pass else "fail")
+static_tone = "pass" if report.static_pass else "fail"
 
-_render_download_panel(
+render_metric_grid([
+    ("Task", report.task_name, "neutral"),
+    ("Instruction", "BLOCK" if report.instruction_blocked else "OK", inst_tone),
+    ("LLM alignment", llm_val, llm_tone),
+    ("Static checks", "PASS" if report.static_pass else "FAIL", static_tone),
+])
+
+render_download_panel(
     report_html,
     report_json,
     f"{safe_name}_qc_report.html",
     f"{safe_name}_qc_report.json",
-    title="Download full QC report",
+    title="Full QC report",
     subtitle=(
-        "HTML = readable report for reviewers. "
-        "JSON = full data (LLM gaps, similarity scores, static issues)."
+        "HTML for human review · JSON with LLM gaps, similarity scores, and static diagnostics."
     ),
     key_prefix="dl_qc_main",
 )
@@ -533,13 +440,16 @@ with tab_llm:
             if not isinstance(item, dict):
                 continue
             verdict = item.get("verdict", "UNKNOWN")
-            icon = "✅" if verdict == "PASS" else "⚠️" if verdict == "NEEDS_WORK" else "❌"
             label = item.get("label", ALIGNMENT_LABELS.get(key, key))
             score = item.get("alignment_score", "—")
 
             with st.container(border=True):
-                st.markdown(f"#### {icon} {label}")
-                st.markdown(f"**{verdict}** · score {score}/100")
+                st.markdown(f"#### {label}")
+                st.markdown(
+                    f"{llm_verdict_label(verdict)} &nbsp; "
+                    f'<span style="color:#64748b;font-size:0.9rem;">Score {score}/100</span>',
+                    unsafe_allow_html=True,
+                )
                 st.markdown(item.get("reasoning", ""))
 
                 ref_comps = item.get("reference_comparisons", [])
@@ -631,10 +541,8 @@ with tab_static:
         st.success("All static checks passed.")
     else:
         for issue in report.static_issues:
-            sev = issue.severity
-            color = "#dc2626" if sev == "CRITICAL" else "#ea580c" if sev == "HIGH" else "#ca8a04"
             st.markdown(
-                f'<span style="color:{color};font-weight:600">{sev}</span> — {issue.message}',
+                f"{severity_badge(issue.severity)} &nbsp; {issue.message}",
                 unsafe_allow_html=True,
             )
             if issue.fix_hint:
@@ -644,7 +552,7 @@ with tab_details:
     st.markdown("#### Report at a glance")
     st.caption(
         "Accepted reference tasks may still fail LLM alignment or show high tracker similarity "
-        "(e.g. matching their own row). Downloads are **above the tabs** — blue banner."
+        "(e.g. matching their own row). Full downloads are in the panel above the tabs."
     )
     summary = report_to_dict(report)
     st.json({
@@ -655,13 +563,13 @@ with tab_details:
         "llm_pass": summary["llm_judge"]["pass"],
         "issue_count": len(summary["static_checks"]["issues"]),
     })
-    _render_download_panel(
+    render_download_panel(
         report_html,
         report_json,
         f"{safe_name}_qc_report.html",
         f"{safe_name}_qc_report.json",
         title="Download again",
-        subtitle="Same files as the banner above.",
+        subtitle="Same report files as the panel above.",
         key_prefix="dl_qc_tab",
     )
 
@@ -669,3 +577,5 @@ if report.notes:
     with st.expander("Technical notes"):
         for note in report.notes:
             st.write(f"- {note}")
+
+render_footer()
