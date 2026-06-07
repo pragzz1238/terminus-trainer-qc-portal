@@ -381,12 +381,18 @@ if run_qc:
 
     def llm_progress(current: int, total: int, label: str, model: str) -> None:
         pct = int((current - 1) / total * 80) + 15
-        progress.progress(min(pct, 95), text=f"LLM check {current}/{total}: {label} ({model})…")
+        progress.progress(
+            min(pct, 95),
+            text=f"LLM alignment {current}/{total} done — {label} ({model})…",
+        )
 
     progress.progress(3, text="Checking instruction.md from your zip against the team tracker…")
 
     with status.container():
-        with st.spinner("Running assessment — instruction first, then static, then LLM judge…"):
+        with st.spinner(
+            "Running assessment — instruction check, static checks, "
+            "then LLM alignment (9 checks in parallel)…"
+        ):
             with tempfile.TemporaryDirectory(prefix="terminus_qc_") as tmp:
                 report, _ = qe.assess_task(
                     zip_bytes=uploaded.getvalue(),

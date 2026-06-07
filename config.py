@@ -172,3 +172,17 @@ def resolve_sheet_defaults() -> dict[str, str]:
 
 def llm_configured() -> bool:
     return bool(resolve_openai_api_key())
+
+
+def resolve_llm_parallel_workers(check_count: int = 9) -> int:
+    """Max concurrent LLM alignment calls (default 6, capped by check count)."""
+    secrets = _get_secrets()
+    raw = (
+        secrets.get("QC_LLM_PARALLEL", "")
+        or os.environ.get("QC_LLM_PARALLEL", "6")
+    )
+    try:
+        workers = int(str(raw).strip())
+    except ValueError:
+        workers = 6
+    return max(1, min(workers, max(check_count, 1)))

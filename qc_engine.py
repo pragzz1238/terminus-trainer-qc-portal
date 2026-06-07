@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
@@ -27,6 +28,7 @@ from config import (
     chat_completion_kwargs,
     resolve_embed_model,
     resolve_llm_model,
+    resolve_llm_parallel_workers,
     resolve_openai_api_key,
 )
 
@@ -1108,6 +1110,59 @@ def build_closest_match_context(
     return "\n\n".join(lines) if lines else ""
 
 
+def _build_alignment_prompt(
+    key: str,
+    prompt_fn: Any,
+    file_kwargs: dict[str, str],
+    accepted_digest: str,
+    closest_match: str,
+) -> str:
+    if key == "accepted_pattern":
+        return prompt_fn(
+            **file_kwargs,
+            accepted_digest=accepted_digest,
+            closest_match=closest_match,
+        )
+    return prompt_fn(**file_kwargs)
+
+
+def _run_single_alignment_check(
+    key: str,
+    label: str,
+    prompt_fn: Any,
+    file_kwargs: dict[str, str],
+    accepted_digest: str,
+    closest_match: str,
+    client: Any,
+    llm_model: str,
+) -> tuple[str, dict[str, Any], str | None]:
+    """Run one alignment LLM call. Returns (key, result_dict, error_note)."""
+    prompt = _build_alignment_prompt(
+        key, prompt_fn, file_kwargs, accepted_digest, closest_match,
+    )
+    try:
+        response = client.chat.completions.create(
+            **chat_completion_kwargs(
+                llm_model,
+                [{"role": "user", "content": prompt}],
+                max_output_tokens=2500,
+                temperature=0.1,
+            )
+        )
+        raw = response.choices[0].message.content or ""
+        parsed = _parse_llm_json(raw)
+        parsed["label"] = label
+        return key, parsed, None
+    except Exception as exc:
+        return key, {
+            "label": label,
+            "verdict": "ERROR",
+            "alignment_score": 0,
+            "reasoning": str(exc),
+            "gaps": [],
+        }, f"LLM alignment check failed for {key}: {exc}"
+
+
 def run_llm_judge(
     task_dir: Path,
     api_key: str,
@@ -1162,50 +1217,47 @@ def run_llm_judge(
     reject_count = 0
     needs_work_count = 0
     total_checks = len(ALIGNMENT_CHECKS)
+    max_workers = resolve_llm_parallel_workers(total_checks)
 
-    for idx, (key, label, prompt_fn) in enumerate(ALIGNMENT_CHECKS, start=1):
-        if on_progress:
-            on_progress(idx, total_checks, label, llm_model)
-        if key == "accepted_pattern":
-            prompt = prompt_fn(
-                **file_kwargs,
-                accepted_digest=accepted_digest,
-                closest_match=closest_match,
-            )
-        else:
-            prompt = prompt_fn(**file_kwargs)
-
-        try:
-            response = client.chat.completions.create(
-                **chat_completion_kwargs(
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(
+                _run_single_alignment_check,
+                key,
+                label,
+                prompt_fn,
+                file_kwargs,
+                accepted_digest,
+                closest_match,
+                client,
+                llm_model,
+            ): (key, label)
+            for key, label, prompt_fn in ALIGNMENT_CHECKS
+        }
+        completed = 0
+        for future in as_completed(futures):
+            key, parsed, error_note = future.result()
+            completed += 1
+            if on_progress:
+                on_progress(
+                    completed,
+                    total_checks,
+                    parsed.get("label", futures[future][1]),
                     llm_model,
-                    [{"role": "user", "content": prompt}],
-                    max_output_tokens=2500,
-                    temperature=0.1,
                 )
-            )
-            raw = response.choices[0].message.content or ""
-            parsed = _parse_llm_json(raw)
-            parsed["label"] = label
             results[key] = parsed
+            if error_note:
+                notes.append(error_note)
             verdict = parsed.get("verdict", "UNKNOWN")
             if verdict == "REJECT":
                 reject_count += 1
             elif verdict == "NEEDS_WORK":
                 needs_work_count += 1
-        except Exception as exc:
-            results[key] = {
-                "label": label,
-                "verdict": "ERROR",
-                "alignment_score": 0,
-                "reasoning": str(exc),
-                "gaps": [],
-            }
-            notes.append(f"LLM alignment check failed for {key}: {exc}")
 
     notes.append(
         f"LLM alignment judge completed via {provider} ({llm_model}): "
-        f"{len(ALIGNMENT_CHECKS)} checks, {reject_count} rejects, {needs_work_count} needs-work"
+        f"{len(ALIGNMENT_CHECKS)} checks in parallel (max {max_workers} workers), "
+        f"{reject_count} rejects, {needs_work_count} needs-work"
     )
     llm_pass = reject_count == 0 and needs_work_count == 0
     return results, llm_pass, notes
