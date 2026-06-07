@@ -60,6 +60,15 @@ st.markdown(
     }
     .metric-box .label { color: #64748b; font-size: 0.85rem; text-transform: uppercase; }
     .metric-box .value { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
+    .download-banner {
+        background: linear-gradient(135deg, #eff6ff 0%, #ecfdf5 100%);
+        border: 2px solid #2563eb;
+        border-radius: 14px;
+        padding: 1.25rem 1.5rem;
+        margin: 1.25rem 0 1rem 0;
+    }
+    .download-banner h3 { margin: 0 0 0.35rem 0; color: #1e3a8a; font-size: 1.15rem; }
+    .download-banner p { margin: 0; color: #475569; font-size: 0.95rem; }
     div[data-testid="stSidebar"] { display: none; }
 </style>
 """,
@@ -77,6 +86,60 @@ if "instruction_pre_text" not in st.session_state:
     st.session_state.instruction_pre_text = ""
 if "instruction_pre_result" not in st.session_state:
     st.session_state.instruction_pre_result = None
+if "qc_cache" not in st.session_state:
+    st.session_state.qc_cache = None
+
+
+def _kb(size_bytes: int) -> str:
+    return f"{max(size_bytes / 1024, 0.1):.1f} KB"
+
+
+def _render_download_panel(
+    html_data: str,
+    json_data: str,
+    html_filename: str,
+    json_filename: str,
+    *,
+    title: str = "Download your reports",
+    subtitle: str = "Save and share — HTML for reviewers, JSON for tooling.",
+    key_prefix: str = "dl",
+) -> None:
+    html_size = _kb(len(html_data.encode("utf-8")))
+    json_size = _kb(len(json_data.encode("utf-8")))
+    st.markdown(
+        f"""
+<div class="download-banner">
+  <h3>📥 {title}</h3>
+  <p>{subtitle}</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            f"📄 Download HTML ({html_size})",
+            data=html_data,
+            file_name=html_filename,
+            mime="text/html",
+            use_container_width=True,
+            type="primary",
+            key=f"{key_prefix}_html",
+            help="Full formatted report — open in any browser",
+        )
+        st.caption(f"`{html_filename}`")
+    with d2:
+        st.download_button(
+            f"📋 Download JSON ({json_size})",
+            data=json_data,
+            file_name=json_filename,
+            mime="application/json",
+            use_container_width=True,
+            type="primary",
+            key=f"{key_prefix}_json",
+            help="Machine-readable — all scores, LLM gaps, similarity matches",
+        )
+        st.caption(f"`{json_filename}`")
 
 st.markdown(
     """
@@ -246,26 +309,15 @@ if check_inst_btn:
             instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
             indent=2,
         )
-        st.markdown("**Download instruction pre-check report**")
-        dl1, dl2 = st.columns(2)
-        with dl1:
-            st.download_button(
-                "📄 instruction_precheck_report.html",
-                data=pre_html,
-                file_name="instruction_precheck_report.html",
-                mime="text/html",
-                use_container_width=True,
-                key="dl_pre_html",
-            )
-        with dl2:
-            st.download_button(
-                "📋 instruction_precheck_report.json",
-                data=pre_json,
-                file_name="instruction_precheck_report.json",
-                mime="application/json",
-                use_container_width=True,
-                key="dl_pre_json",
-            )
+        _render_download_panel(
+            pre_html,
+            pre_json,
+            "instruction_precheck_report.html",
+            "instruction_precheck_report.json",
+            title="Download instruction pre-check report",
+            subtitle="Similarity matches, embedding status, and diagnostics.",
+            key_prefix="dl_pre",
+        )
 
 elif st.session_state.instruction_pre_result:
     pre_result = st.session_state.instruction_pre_result
@@ -297,25 +349,15 @@ elif st.session_state.instruction_pre_result:
         ),
         indent=2,
     )
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            "📄 instruction_precheck_report.html",
-            data=pre_html,
-            file_name="instruction_precheck_report.html",
-            mime="text/html",
-            use_container_width=True,
-            key="dl_pre_html_persist",
-        )
-    with dl2:
-        st.download_button(
-            "📋 instruction_precheck_report.json",
-            data=pre_json,
-            file_name="instruction_precheck_report.json",
-            mime="application/json",
-            use_container_width=True,
-            key="dl_pre_json_persist",
-        )
+    _render_download_panel(
+        pre_html,
+        pre_json,
+        "instruction_precheck_report.html",
+        "instruction_precheck_report.json",
+        title="Download instruction pre-check report",
+        subtitle="From your last instruction check.",
+        key_prefix="dl_pre_persist",
+    )
 
 if st.session_state.instruction_pre_passed:
     st.success("✓ Instruction pre-check passed — you can upload your task zip below.")
@@ -340,6 +382,13 @@ if uploaded is None:
     st.info("Upload a task zip to begin full assessment.")
     st.stop()
 
+upload_sig = f"{uploaded.name}:{uploaded.size}"
+if (
+    st.session_state.qc_cache
+    and st.session_state.qc_cache.get("upload_sig") != upload_sig
+):
+    st.session_state.qc_cache = None
+
 fcol1, fcol2, fcol3 = st.columns(3)
 fcol1.markdown(
     f'<div class="metric-box"><div class="label">File</div><div class="value" style="font-size:1rem">'
@@ -359,47 +408,65 @@ fcol3.markdown(
 
 run_qc = st.button("Run Full QC Assessment", type="primary", use_container_width=True)
 
+if run_qc:
+    progress = st.progress(0, text="Starting assessment…")
+    status = st.empty()
+
+    def llm_progress(current: int, total: int, label: str, model: str) -> None:
+        pct = int((current - 1) / total * 80) + 15
+        progress.progress(min(pct, 95), text=f"LLM check {current}/{total}: {label} ({model})…")
+
+    progress.progress(3, text="Checking instruction.md from zip (parallel lexical + embedding)…")
+
+    with status.container():
+        with st.spinner("Running assessment — instruction first, then static, then LLM judge…"):
+            with tempfile.TemporaryDirectory(prefix="terminus_qc_") as tmp:
+                report, _ = assess_task(
+                    zip_bytes=uploaded.getvalue(),
+                    zip_name=uploaded.name,
+                    trainer_name=trainer_name,
+                    sheet_url=sheet_url,
+                    worksheet=worksheet,
+                    task_col=task_col,
+                    instruction_col=instruction_col,
+                    spec_col=spec_col,
+                    trainer_col=trainer_col,
+                    instruction_col_index=instruction_col_index,
+                    corpus_json_path=corpus_path if not sheet_url.strip() else "",
+                    openai_api_key=resolve_openai_api_key(),
+                    run_llm=run_llm and llm_ready,
+                    work_dir=Path(tmp),
+                    on_llm_progress=llm_progress,
+                )
+
+    progress.progress(100, text="Done!")
+    status.empty()
+
+    report_json = json.dumps(report_to_dict(report), indent=2)
+    report_html = render_html_report(report)
+    safe_name = report.task_name.replace(" ", "-")
+    st.session_state.qc_cache = {
+        "upload_sig": upload_sig,
+        "report": report,
+        "report_json": report_json,
+        "report_html": report_html,
+        "safe_name": safe_name,
+    }
+
+cache = st.session_state.qc_cache
 if not run_qc:
-    st.stop()
-
-progress = st.progress(0, text="Starting assessment…")
-status = st.empty()
-
-
-def llm_progress(current: int, total: int, label: str, model: str) -> None:
-    pct = int((current - 1) / total * 80) + 15
-    progress.progress(min(pct, 95), text=f"LLM check {current}/{total}: {label} ({model})…")
-
-
-progress.progress(3, text="Checking instruction.md from zip (parallel lexical + embedding)…")
-
-with status.container():
-    with st.spinner("Running assessment — instruction first, then static, then LLM judge…"):
-        with tempfile.TemporaryDirectory(prefix="terminus_qc_") as tmp:
-            report, _ = assess_task(
-                zip_bytes=uploaded.getvalue(),
-                zip_name=uploaded.name,
-                trainer_name=trainer_name,
-                sheet_url=sheet_url,
-                worksheet=worksheet,
-                task_col=task_col,
-                instruction_col=instruction_col,
-                spec_col=spec_col,
-                trainer_col=trainer_col,
-                instruction_col_index=instruction_col_index,
-                corpus_json_path=corpus_path if not sheet_url.strip() else "",
-                openai_api_key=resolve_openai_api_key(),
-                run_llm=run_llm and llm_ready,
-                work_dir=Path(tmp),
-                on_llm_progress=llm_progress,
-            )
-
-progress.progress(100, text="Done!")
-status.empty()
-
-report_json = json.dumps(report_to_dict(report), indent=2)
-report_html = render_html_report(report)
-safe_name = report.task_name.replace(" ", "-")
+    if cache and cache.get("upload_sig") == upload_sig:
+        report = cache["report"]
+        report_json = cache["report_json"]
+        report_html = cache["report_html"]
+        safe_name = cache["safe_name"]
+    else:
+        st.stop()
+else:
+    report = st.session_state.qc_cache["report"]
+    report_json = st.session_state.qc_cache["report_json"]
+    report_html = st.session_state.qc_cache["report_html"]
+    safe_name = st.session_state.qc_cache["safe_name"]
 
 st.markdown("---")
 st.markdown("### Step 2 — Results")
@@ -441,8 +508,21 @@ m4.markdown(
     unsafe_allow_html=True,
 )
 
-tab_llm, tab_similarity, tab_static, tab_download = st.tabs(
-    ["LLM Alignment (primary)", "Instruction Similarity", "Static Checks", "Download Report"]
+_render_download_panel(
+    report_html,
+    report_json,
+    f"{safe_name}_qc_report.html",
+    f"{safe_name}_qc_report.json",
+    title="Download full QC report",
+    subtitle=(
+        "HTML = readable report for reviewers. "
+        "JSON = full data (LLM gaps, similarity scores, static issues)."
+    ),
+    key_prefix="dl_qc_main",
+)
+
+tab_llm, tab_similarity, tab_static, tab_details = st.tabs(
+    ["LLM Alignment (primary)", "Instruction Similarity", "Static Checks", "Report summary"]
 )
 
 with tab_llm:
@@ -560,29 +640,30 @@ with tab_static:
             if issue.fix_hint:
                 st.caption(f"Fix: {issue.fix_hint}")
 
-with tab_download:
-    st.markdown("Download your QC report — share the HTML with reviewers.")
+with tab_details:
+    st.markdown("#### Report at a glance")
     st.caption(
         "Accepted reference tasks may still fail LLM alignment or show high tracker similarity "
-        "(e.g. matching their own row). Use the **Similarity** and **LLM Alignment** tabs to see why."
+        "(e.g. matching their own row). Downloads are **above the tabs** — blue banner."
     )
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button(
-            f"📄 {safe_name}_qc_report.html",
-            data=report_html,
-            file_name=f"{safe_name}_qc_report.html",
-            mime="text/html",
-            use_container_width=True,
-        )
-    with d2:
-        st.download_button(
-            f"📋 {safe_name}_qc_report.json",
-            data=report_json,
-            file_name=f"{safe_name}_qc_report.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+    summary = report_to_dict(report)
+    st.json({
+        "overall_pass": summary["overall_pass"],
+        "task_name": summary["task_name"],
+        "static_pass": summary["static_checks"]["pass"],
+        "similarity_pass": summary["similarity"]["pass"],
+        "llm_pass": summary["llm_judge"]["pass"],
+        "issue_count": len(summary["static_checks"]["issues"]),
+    })
+    _render_download_panel(
+        report_html,
+        report_json,
+        f"{safe_name}_qc_report.html",
+        f"{safe_name}_qc_report.json",
+        title="Download again",
+        subtitle="Same files as the banner above.",
+        key_prefix="dl_qc_tab",
+    )
 
 if report.notes:
     with st.expander("Technical notes"):
