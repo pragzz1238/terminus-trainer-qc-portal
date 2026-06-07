@@ -159,6 +159,7 @@ with st.container(border=True):
         f"Upload instruction.md (optional, max {MAX_INSTRUCTION_MD_MB} MB)",
         type=["md"],
         key="instruction_only",
+        max_upload_size=MAX_INSTRUCTION_MD_MB,
     )
     st.caption(f"Markdown only · maximum {MAX_INSTRUCTION_MD_MB} MB per file")
     inst_text_area = st.text_area(
@@ -347,6 +348,7 @@ with st.container(border=True):
         f"Task zip file (max {MAX_ZIP_MB} MB)",
         type=["zip"],
         disabled=not st.session_state.instruction_pre_passed,
+        max_upload_size=MAX_ZIP_MB,
     )
 
 if not st.session_state.instruction_pre_passed:
