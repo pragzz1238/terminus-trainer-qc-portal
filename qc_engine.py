@@ -24,6 +24,7 @@ from alignment_prompts import (
 from config import (
     api_provider_label,
     build_openai_client,
+    chat_completion_kwargs,
     resolve_embed_model,
     resolve_llm_model,
     resolve_openai_api_key,
@@ -1025,10 +1026,12 @@ def run_llm_judge(
 
         try:
             response = client.chat.completions.create(
-                model=llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2500,
+                **chat_completion_kwargs(
+                    llm_model,
+                    [{"role": "user", "content": prompt}],
+                    max_output_tokens=2500,
+                    temperature=0.1,
+                )
             )
             raw = response.choices[0].message.content or ""
             parsed = _parse_llm_json(raw)

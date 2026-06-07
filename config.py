@@ -101,6 +101,42 @@ def api_provider_label(api_key: str = "") -> str:
     return "OpenRouter" if uses_openrouter(api_key) else "OpenAI"
 
 
+def _model_slug(model: str) -> str:
+    """Normalize provider-prefixed ids, e.g. openai/gpt-5.2 -> gpt-5.2."""
+    return (model or "").strip().split("/")[-1].lower()
+
+
+def uses_max_completion_tokens(model: str) -> bool:
+    """GPT-5 / o-series chat models reject legacy max_tokens."""
+    slug = _model_slug(model)
+    return (
+        slug.startswith("gpt-5")
+        or slug.startswith("o1")
+        or slug.startswith("o3")
+        or slug.startswith("o4")
+    )
+
+
+def chat_completion_kwargs(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    max_output_tokens: int = 2500,
+    temperature: float = 0.1,
+) -> dict[str, Any]:
+    """Build chat.completions.create kwargs compatible with legacy and GPT-5 models."""
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if uses_max_completion_tokens(model):
+        kwargs["max_completion_tokens"] = max_output_tokens
+    else:
+        kwargs["max_tokens"] = max_output_tokens
+    return kwargs
+
+
 def resolve_sheet_defaults() -> dict[str, str]:
     from tracker_defaults import (
         DEFAULT_INSTRUCTION_COL,
