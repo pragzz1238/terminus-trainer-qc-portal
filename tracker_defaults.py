@@ -34,6 +34,6 @@ DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 DEFAULT_EMBED_ENDPOINT = "https://api.openai.com/v1/embeddings"
 
 # Default column names for CSV header row
-DEFAULT_TASK_COL = "Task Name"
+DEFAULT_TASK_COL = "Task name"
 DEFAULT_INSTRUCTION_COL = TASK_INSTRUCTION_HEADER
 DEFAULT_TRAINER_COL = "Trainer Name"

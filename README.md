@@ -66,7 +66,7 @@ Plus sheet block (pre-filled in `secrets.toml.example`):
 [sheet]
 url = "https://docs.google.com/spreadsheets/d/1XR_EFXtUt4GQ_d6zlkPT4arZi-BG-zFGHx4ctSSG51s/edit"
 worksheet = "May 1st - 31st"
-task_col = "Task Name"
+task_col = "Task name"
 instruction_col = "Task Instruction"
 trainer_col = "Trainer Name"
 instruction_col_index = "16"

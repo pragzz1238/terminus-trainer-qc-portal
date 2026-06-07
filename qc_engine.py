@@ -7,10 +7,10 @@ import re
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -52,6 +52,7 @@ from tracker_defaults import (
 )
 SIM_THRESHOLD_WARN = INSTRUCTION_SIM_WARN
 SIM_THRESHOLD_BLOCK = INSTRUCTION_SIM_BLOCK
+BUNDLED_CORPUS_PATH = Path(__file__).resolve().parent / "terminus_task_corpus.json"
 CHANGE_TASK_MESSAGE = (
     "Change the task — instruction is too similar to an existing task "
     "(both lexical and embedding checks are at or above 60%)."
@@ -414,8 +415,29 @@ def _sheet_csv_url(sheet_url: str, worksheet: str = "") -> str:
     sheet_id = _sheet_id_from_url(sheet_url)
     base = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
     if worksheet:
-        base += f"&sheet={worksheet.replace(' ', '%20')}"
+        base += f"&sheet={quote(worksheet)}"
     return base
+
+
+def _fetch_sheet_dataframe(sheet_url: str, worksheet: str = "") -> pd.DataFrame:
+    """Fetch public Google Sheet as CSV (works on Streamlit Cloud)."""
+    import requests
+
+    csv_url = _sheet_csv_url(sheet_url, worksheet)
+    resp = requests.get(csv_url, timeout=45)
+    resp.raise_for_status()
+    text = resp.text
+    if not text.strip():
+        raise ValueError("Sheet CSV export returned empty body.")
+    if text.lstrip().startswith("<!DOCTYPE") or "<html" in text[:500].lower():
+        raise ValueError(
+            "Sheet CSV export returned HTML — share the sheet as "
+            "'Anyone with the link can view' and verify the worksheet tab name."
+        )
+    df = pd.read_csv(StringIO(text))
+    if df.empty:
+        raise ValueError("Sheet CSV parsed to zero rows.")
+    return df
 
 
 def _pick_column(columns: list[str], candidates: list[str]) -> str | None:
@@ -465,9 +487,8 @@ def load_reference_from_sheet(
 ) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, str]], list[str]]:
     """Load corpus from Terminus Task Tracker sheet (CSV export)."""
     notes: list[str] = []
-    csv_url = _sheet_csv_url(sheet_url, worksheet)
-    df = pd.read_csv(csv_url)
-    df.columns = [str(c).strip() for c in df.columns]
+    df = _fetch_sheet_dataframe(sheet_url, worksheet)
+    df.columns = [str(c).strip() if str(c).strip() else f"unnamed_{i}" for i, c in enumerate(df.columns)]
 
     task_column = task_col or _pick_column(
         list(df.columns), ["task name", "task_name", "taskname", "task title", "title"]
@@ -622,17 +643,29 @@ def load_similarity_corpus(
                 instruction_col_index=instruction_col_index,
             )
             notes.extend(sheet_notes)
+            if not instructions:
+                notes.append(
+                    "Tracker sheet loaded but column 'Task Instruction' (P) has no text "
+                    f'on tab "{worksheet or "default"}".'
+                )
         except Exception as exc:
             notes.append(f"Google Sheet load failed: {exc}")
-    elif corpus_json_path and Path(corpus_json_path).exists():
-        instructions, specs, json_notes = load_reference_from_json(Path(corpus_json_path))
-        corpus_meta = {
-            k: {"instruction": v, "trainer": "", "task_name": k}
-            for k, v in instructions.items()
-        }
-        notes.extend(json_notes)
-    else:
-        notes.append("No similarity reference — configure tracker sheet in admin secrets.")
+
+    if not instructions:
+        fallback_path = Path(corpus_json_path) if corpus_json_path else BUNDLED_CORPUS_PATH
+        if fallback_path.exists():
+            instructions, specs, json_notes = load_reference_from_json(fallback_path)
+            corpus_meta = {
+                k: {"instruction": v, "trainer": "", "task_name": k}
+                for k, v in instructions.items()
+            }
+            notes.extend(json_notes)
+            notes.append(
+                f"Using bundled local corpus ({len(instructions)} tasks) — "
+                "tracker sheet unavailable or empty."
+            )
+        elif not notes:
+            notes.append("No similarity reference — configure tracker sheet in admin secrets.")
 
     return instructions, specs, corpus_meta, notes
 
@@ -787,8 +820,14 @@ def check_instruction_similarity(
             "Lexical check only — embedding did NOT run. "
             "Configure OPENAI_API_KEY in Streamlit secrets for full dual check."
         )
+    elif not instructions:
+        sheet_errors = [n for n in load_notes if "failed" in n.lower() or "returned" in n.lower()]
+        pass_message = (
+            "No tracker instructions loaded to compare against. "
+            + (sheet_errors[0] if sheet_errors else "Check sheet sharing and tab name in secrets.")
+        )
     else:
-        pass_message = "No tracker instructions loaded to compare against."
+        pass_message = "No similarity matches returned."
 
     return {
         "blocked": blocked,
@@ -796,6 +835,7 @@ def check_instruction_similarity(
         "matches": matches,
         "notes": notes,
         "change_task": blocked,
+        "corpus_count": len(instructions),
         "embedding_ran": run_meta.get("embedding_ran", False),
         "embed_model": run_meta.get("embed_model", "text-embedding-3-small"),
         "embedding_error": run_meta.get("embedding_error"),

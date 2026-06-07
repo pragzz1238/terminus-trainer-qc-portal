@@ -190,9 +190,21 @@ if check_inst_btn:
                 "Only lexical word-overlap was checked."
             )
 
+        corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
+        if corpus_count:
+            st.caption(f"Compared against **{corpus_count}** reference instructions.")
+
+        if pre_result.get("notes"):
+            with st.expander("Sheet load details", expanded=corpus_count == 0):
+                for note in pre_result["notes"]:
+                    st.write(f"- {note}")
+
         if pre_result.get("blocked"):
             st.session_state.instruction_pre_passed = False
             st.error(pre_result.get("message") or CHANGE_TASK_MESSAGE)
+        elif corpus_count == 0:
+            st.session_state.instruction_pre_passed = False
+            st.error(pre_result.get("message", "No reference corpus loaded."))
         else:
             st.session_state.instruction_pre_passed = True
             st.success(pre_result.get("message", "Instruction pre-check passed."))
