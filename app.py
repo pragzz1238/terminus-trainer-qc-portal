@@ -53,6 +53,20 @@ SIMILARITY_TAB_HELP = (
     f"Checked before upload and again from your zip. Change task only when word overlap "
     f"and meaning are both ≥ {SIM_PCT}%."
 )
+MAX_INSTRUCTION_MD_MB = 5
+MAX_ZIP_MB = 200
+MAX_INSTRUCTION_MD_BYTES = MAX_INSTRUCTION_MD_MB * 1024 * 1024
+MAX_ZIP_BYTES = MAX_ZIP_MB * 1024 * 1024
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / 1024:.0f} KB"
+
+
+def _text_size_bytes(text: str) -> int:
+    return len(text.encode("utf-8"))
 
 st.set_page_config(
     page_title="Terminus QC · Task Checker",
@@ -142,10 +156,11 @@ with st.container(border=True):
     )
 
     inst_file = st.file_uploader(
-        "Upload instruction.md (optional)",
+        f"Upload instruction.md (optional, max {MAX_INSTRUCTION_MD_MB} MB)",
         type=["md"],
         key="instruction_only",
     )
+    st.caption(f"Markdown only · maximum {MAX_INSTRUCTION_MD_MB} MB per file")
     inst_text_area = st.text_area(
         "Or paste your instruction text",
         value=st.session_state.instruction_pre_text,
@@ -154,14 +169,29 @@ with st.container(border=True):
     )
 
     instruction_text = inst_text_area.strip()
+    instruction_file_too_large = False
     if inst_file is not None:
-        instruction_text = inst_file.getvalue().decode("utf-8", errors="replace").strip()
+        if inst_file.size > MAX_INSTRUCTION_MD_BYTES:
+            instruction_file_too_large = True
+            st.error(
+                f"instruction.md is too large ({_format_size(inst_file.size)}). "
+                f"Maximum is {MAX_INSTRUCTION_MD_MB} MB."
+            )
+        else:
+            instruction_text = inst_file.getvalue().decode("utf-8", errors="replace").strip()
 
     check_inst_btn = st.button("Run instruction check", type="primary", use_container_width=True)
 
 if check_inst_btn:
-    if not instruction_text:
+    if instruction_file_too_large:
+        pass
+    elif not instruction_text:
         st.error("Paste or upload your instruction before checking.")
+    elif _text_size_bytes(instruction_text) > MAX_INSTRUCTION_MD_BYTES:
+        st.error(
+            f"Instruction text is too large ({_format_size(_text_size_bytes(instruction_text))}). "
+            f"Maximum is {MAX_INSTRUCTION_MD_MB} MB."
+        )
     else:
         with st.spinner("Comparing your instruction against the team tracker…"):
             pre_result = check_instruction_similarity(
@@ -301,10 +331,11 @@ with st.container(border=True):
     render_panel_header(
         1,
         "Upload task archive",
-        "Submit your Terminal-Bench task as a .zip after the instruction check passes.",
+        f"Submit your Terminal-Bench task as a .zip after the instruction check passes "
+        f"(maximum {MAX_ZIP_MB} MB).",
     )
     uploaded = st.file_uploader(
-        "Task zip file",
+        f"Task zip file (max {MAX_ZIP_MB} MB)",
         type=["zip"],
         disabled=not st.session_state.instruction_pre_passed,
     )
@@ -314,6 +345,13 @@ if not st.session_state.instruction_pre_passed:
 
 if uploaded is None:
     st.info("Upload a task zip to begin full assessment.")
+    st.stop()
+
+if uploaded.size > MAX_ZIP_BYTES:
+    st.error(
+        f"Zip file is too large ({_format_size(uploaded.size)}). "
+        f"Maximum is {MAX_ZIP_MB} MB."
+    )
     st.stop()
 
 upload_sig = f"{uploaded.name}:{uploaded.size}"
