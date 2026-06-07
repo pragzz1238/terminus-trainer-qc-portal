@@ -671,6 +671,43 @@ def load_similarity_corpus(
     return instructions, specs, corpus_meta, notes
 
 
+def fetch_similarity_corpus(
+    sheet_url: str = "",
+    worksheet: str = "",
+    task_col: str = "",
+    instruction_col: str = "",
+    spec_col: str = "",
+    trainer_col: str = "",
+    instruction_col_index: int = TRACKER_COL_TASK_INSTRUCTION,
+    corpus_json_path: str = "",
+) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, str]], list[str]]:
+    """Load tracker corpus with Streamlit cache when available."""
+    try:
+        from portal_cache import cached_load_similarity_corpus
+
+        return cached_load_similarity_corpus(
+            sheet_url=sheet_url,
+            worksheet=worksheet,
+            task_col=task_col,
+            instruction_col=instruction_col,
+            spec_col=spec_col,
+            trainer_col=trainer_col,
+            instruction_col_index=instruction_col_index,
+            corpus_json_path=corpus_json_path,
+        )
+    except Exception:
+        return load_similarity_corpus(
+            sheet_url=sheet_url,
+            worksheet=worksheet,
+            task_col=task_col,
+            instruction_col=instruction_col,
+            spec_col=spec_col,
+            trainer_col=trainer_col,
+            instruction_col_index=instruction_col_index,
+            corpus_json_path=corpus_json_path,
+        )
+
+
 def run_instruction_similarity(
     instruction_text: str,
     instructions_corpus: dict[str, str],
@@ -787,7 +824,7 @@ def check_instruction_similarity(
     api_key: str = "",
 ) -> dict[str, Any]:
     """Standalone instruction.md check — runs before zip upload."""
-    instructions, _, corpus_meta, load_notes = load_similarity_corpus(
+    instructions, _, corpus_meta, load_notes = fetch_similarity_corpus(
         sheet_url=sheet_url,
         worksheet=worksheet,
         task_col=task_col,
@@ -1241,7 +1278,7 @@ def assess_task(
     notes: list[str] = []
     api_key = openai_api_key.strip() or resolve_openai_api_key()
 
-    instructions_corpus, specs_corpus, corpus_meta, corpus_notes = load_similarity_corpus(
+    instructions_corpus, specs_corpus, corpus_meta, corpus_notes = fetch_similarity_corpus(
         sheet_url=sheet_url,
         worksheet=worksheet,
         task_col=task_col,

@@ -8,22 +8,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from alignment_prompts import ALIGNMENT_LABELS
 from config import (
     api_provider_label,
     llm_configured,
     resolve_llm_model,
     resolve_openai_api_key,
     resolve_sheet_defaults,
-)
-from qc_engine import (
-    CHANGE_TASK_MESSAGE,
-    assess_task,
-    check_instruction_similarity,
-    instruction_precheck_to_dict,
-    render_html_report,
-    render_instruction_precheck_html,
-    report_to_dict,
 )
 from tracker_defaults import INSTRUCTION_SIM_THRESHOLD
 from ui_components import (
@@ -67,6 +57,14 @@ def _format_size(size_bytes: int) -> str:
 
 def _text_size_bytes(text: str) -> int:
     return len(text.encode("utf-8"))
+
+
+@st.cache_resource(show_spinner=False)
+def _qc_engine():
+    import qc_engine
+
+    return qc_engine
+
 
 st.set_page_config(
     page_title="Terminus QC · Task Checker",
@@ -193,8 +191,9 @@ if check_inst_btn:
             f"Maximum is {MAX_INSTRUCTION_MD_MB} MB."
         )
     else:
+        qe = _qc_engine()
         with st.spinner("Comparing your instruction against the team tracker…"):
-            pre_result = check_instruction_similarity(
+            pre_result = qe.check_instruction_similarity(
                 instruction_text=instruction_text,
                 sheet_url=sheet_url,
                 worksheet=worksheet,
@@ -238,7 +237,7 @@ if check_inst_btn:
 
         if pre_result.get("blocked"):
             st.session_state.instruction_pre_passed = False
-            st.error(pre_result.get("message") or CHANGE_TASK_MESSAGE)
+            st.error(pre_result.get("message") or qe.CHANGE_TASK_MESSAGE)
         elif corpus_count == 0:
             st.session_state.instruction_pre_passed = False
             st.error(pre_result.get("message", "No reference corpus loaded."))
@@ -265,9 +264,9 @@ if check_inst_btn:
                 hide_index=True,
             )
 
-        pre_html = render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
+        pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
         pre_json = json.dumps(
-            instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
+            qe.instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
             indent=2,
         )
         render_download_panel(
@@ -281,6 +280,7 @@ if check_inst_btn:
         )
 
 elif st.session_state.instruction_pre_result:
+    qe = _qc_engine()
     pre_result = st.session_state.instruction_pre_result
     st.caption("Last instruction pre-check result (re-run to refresh)")
     if pre_result.get("matches"):
@@ -301,11 +301,11 @@ elif st.session_state.instruction_pre_result:
             use_container_width=True,
             hide_index=True,
         )
-    pre_html = render_instruction_precheck_html(
+    pre_html = qe.render_instruction_precheck_html(
         pre_result, st.session_state.instruction_pre_text, trainer_name
     )
     pre_json = json.dumps(
-        instruction_precheck_to_dict(
+        qe.instruction_precheck_to_dict(
             pre_result, st.session_state.instruction_pre_text, trainer_name
         ),
         indent=2,
@@ -375,6 +375,7 @@ with st.container(border=True):
     run_qc = st.button("Run full QC assessment", type="primary", use_container_width=True)
 
 if run_qc:
+    qe = _qc_engine()
     progress = st.progress(0, text="Starting assessment…")
     status = st.empty()
 
@@ -387,7 +388,7 @@ if run_qc:
     with status.container():
         with st.spinner("Running assessment — instruction first, then static, then LLM judge…"):
             with tempfile.TemporaryDirectory(prefix="terminus_qc_") as tmp:
-                report, _ = assess_task(
+                report, _ = qe.assess_task(
                     zip_bytes=uploaded.getvalue(),
                     zip_name=uploaded.name,
                     trainer_name=trainer_name,
@@ -408,8 +409,8 @@ if run_qc:
     progress.progress(100, text="Done!")
     status.empty()
 
-    report_json = json.dumps(report_to_dict(report), indent=2)
-    report_html = render_html_report(report)
+    report_json = json.dumps(qe.report_to_dict(report), indent=2)
+    report_html = qe.render_html_report(report)
     safe_name = report.task_name.replace(" ", "-")
     st.session_state.qc_cache = {
         "upload_sig": upload_sig,
@@ -422,6 +423,7 @@ if run_qc:
 cache = st.session_state.qc_cache
 if not run_qc:
     if cache and cache.get("upload_sig") == upload_sig:
+        qe = _qc_engine()
         report = cache["report"]
         report_json = cache["report_json"]
         report_html = cache["report_html"]
@@ -442,7 +444,7 @@ render_section_header(
 )
 
 if report.instruction_blocked:
-    st.error(report.instruction_block_message or CHANGE_TASK_MESSAGE)
+    st.error(report.instruction_block_message or qe.CHANGE_TASK_MESSAGE)
 
 hint = ""
 if report.llm_results and not report.overall_pass and report.llm_pass is False:
@@ -481,6 +483,8 @@ with tab_llm:
     if not report.llm_results:
         st.info("LLM judge was not run. Ask your admin to configure the API key.")
     else:
+        from alignment_prompts import ALIGNMENT_LABELS
+
         for key, item in report.llm_results.items():
             if not isinstance(item, dict):
                 continue
@@ -594,7 +598,7 @@ with tab_details:
         "Accepted reference tasks may still fail LLM alignment or show high tracker similarity "
         "(e.g. matching their own row). Full downloads are in the panel above the tabs."
     )
-    summary = report_to_dict(report)
+    summary = qe.report_to_dict(report)
     st.json({
         "overall_pass": summary["overall_pass"],
         "task_name": summary["task_name"],

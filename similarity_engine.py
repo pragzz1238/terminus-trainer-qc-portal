@@ -80,6 +80,15 @@ def is_dual_duplicate(
     return lexical_score >= threshold and semantic_score >= threshold
 
 
+def embed_texts_batch(
+    texts: list[str],
+    api_key: str,
+    model: str | None = None,
+) -> list[list[float]]:
+    """Public batch embed helper (used by portal cache)."""
+    return _get_embeddings(texts, api_key, model)
+
+
 def _get_embeddings(
     texts: list[str],
     api_key: str,
@@ -129,13 +138,34 @@ def _compute_semantic_scores(
 ) -> dict[str, float]:
     if not api_key or not candidates:
         return {}
-    texts = [query] + [meta.get("instruction", "") for _, meta in candidates]
-    embeddings = _get_embeddings(texts, api_key)
-    source_emb = embeddings[0]
-    scores: dict[str, float] = {}
-    for idx, (key, _) in enumerate(candidates):
-        scores[key] = _cosine(source_emb, embeddings[idx + 1])
-    return scores
+    from config import resolve_embed_model
+
+    embed_model = resolve_embed_model(api_key)
+    keys = [key for key, _ in candidates]
+    corpus_texts = [meta.get("instruction", "") for _, meta in candidates]
+
+    try:
+        from portal_cache import cached_instruction_embeddings, corpus_text_signature
+
+        signature = corpus_text_signature(list(zip(keys, corpus_texts)))
+        cached_vectors = cached_instruction_embeddings(
+            signature,
+            embed_model,
+            tuple(corpus_texts),
+        )
+        query_emb = _get_embeddings([query], api_key, embed_model)[0]
+        scores: dict[str, float] = {}
+        for idx, key in enumerate(keys):
+            scores[key] = _cosine(query_emb, list(cached_vectors[idx]))
+        return scores
+    except Exception:
+        texts = [query] + corpus_texts
+        embeddings = _get_embeddings(texts, api_key, embed_model)
+        source_emb = embeddings[0]
+        scores = {}
+        for idx, key in enumerate(keys):
+            scores[key] = _cosine(source_emb, embeddings[idx + 1])
+        return scores
 
 
 def compare_instruction_to_corpus(

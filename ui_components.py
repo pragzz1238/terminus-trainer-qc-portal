@@ -12,9 +12,6 @@ PRODUCT_TAGLINE = "Task Quality Checker"
 def inject_global_css() -> None:
     st.markdown(
         """
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
     :root {
         --t-bg: #f4f6f9;
@@ -31,7 +28,7 @@ def inject_global_css() -> None:
     }
     .stApp {
         background: linear-gradient(180deg, #f8fafc 0%, var(--t-bg) 120px, var(--t-bg) 100%);
-        font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     .block-container {
         padding-top: 1.25rem;
@@ -39,10 +36,10 @@ def inject_global_css() -> None:
         max-width: 1080px;
     }
     h1, h2, h3, h4, h5, h6, p, label, .stMarkdown {
-        font-family: "IBM Plex Sans", sans-serif !important;
+        font-family: inherit !important;
     }
     code, .stCaption code {
-        font-family: "IBM Plex Mono", monospace !important;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
         font-size: 0.85em;
     }
     #MainMenu, footer, header[data-testid="stHeader"] {
