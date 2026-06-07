@@ -20,7 +20,9 @@ from qc_engine import (
     CHANGE_TASK_MESSAGE,
     assess_task,
     check_instruction_similarity,
+    instruction_precheck_to_dict,
     render_html_report,
+    render_instruction_precheck_html,
     report_to_dict,
 )
 from tracker_defaults import INSTRUCTION_SIM_THRESHOLD
@@ -73,6 +75,8 @@ if "instruction_pre_passed" not in st.session_state:
     st.session_state.instruction_pre_passed = False
 if "instruction_pre_text" not in st.session_state:
     st.session_state.instruction_pre_text = ""
+if "instruction_pre_result" not in st.session_state:
+    st.session_state.instruction_pre_result = None
 
 st.markdown(
     """
@@ -176,18 +180,26 @@ if check_inst_btn:
                 api_key=resolve_openai_api_key(),
             )
         st.session_state.instruction_pre_text = instruction_text
+        st.session_state.instruction_pre_result = pre_result
 
         if pre_result.get("embedding_ran"):
             st.info(
-                f"✓ Embedding API ran: **{pre_result.get('embed_model', 'text-embedding-3-small')}** "
+                f"✓ Embedding API ran ({pre_result.get('api_provider', 'OpenAI')}): "
+                f"**{pre_result.get('embed_model', 'text-embedding-3-small')}** "
                 f"against **{pre_result.get('corpus_size', 0)}** tracker instructions"
             )
         elif pre_result.get("embedding_error"):
             st.warning(f"Embedding did **not** run: {pre_result['embedding_error']}")
-        else:
+        elif not pre_result.get("api_key_present") and not llm_ready:
             st.warning(
                 "Embedding did **not** run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
                 "Only lexical word-overlap was checked."
+            )
+        elif not pre_result.get("api_key_present"):
+            st.warning("API key missing for embedding step (LLM may still work on zip QC).")
+        else:
+            st.warning(
+                "Embedding step did not complete — see **Sheet load details** and download the report below."
             )
 
         corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
@@ -228,6 +240,82 @@ if check_inst_btn:
                 use_container_width=True,
                 hide_index=True,
             )
+
+        pre_html = render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
+        pre_json = json.dumps(
+            instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
+            indent=2,
+        )
+        st.markdown("**Download instruction pre-check report**")
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "📄 instruction_precheck_report.html",
+                data=pre_html,
+                file_name="instruction_precheck_report.html",
+                mime="text/html",
+                use_container_width=True,
+                key="dl_pre_html",
+            )
+        with dl2:
+            st.download_button(
+                "📋 instruction_precheck_report.json",
+                data=pre_json,
+                file_name="instruction_precheck_report.json",
+                mime="application/json",
+                use_container_width=True,
+                key="dl_pre_json",
+            )
+
+elif st.session_state.instruction_pre_result:
+    pre_result = st.session_state.instruction_pre_result
+    st.caption("Last instruction pre-check result (re-run to refresh)")
+    if pre_result.get("matches"):
+        st.dataframe(
+            [
+                {
+                    "Task": m.task_id,
+                    "Trainer": m.trainer or "—",
+                    "Lexical %": round((m.lexical_score or 0) * 100, 1),
+                    "Embedding %": (
+                        round(m.semantic_score * 100, 1)
+                        if m.semantic_score is not None else "—"
+                    ),
+                    "Change task?": "YES" if m.dual_block else "No",
+                }
+                for m in pre_result["matches"]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    pre_html = render_instruction_precheck_html(
+        pre_result, st.session_state.instruction_pre_text, trainer_name
+    )
+    pre_json = json.dumps(
+        instruction_precheck_to_dict(
+            pre_result, st.session_state.instruction_pre_text, trainer_name
+        ),
+        indent=2,
+    )
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "📄 instruction_precheck_report.html",
+            data=pre_html,
+            file_name="instruction_precheck_report.html",
+            mime="text/html",
+            use_container_width=True,
+            key="dl_pre_html_persist",
+        )
+    with dl2:
+        st.download_button(
+            "📋 instruction_precheck_report.json",
+            data=pre_json,
+            file_name="instruction_precheck_report.json",
+            mime="application/json",
+            use_container_width=True,
+            key="dl_pre_json_persist",
+        )
 
 if st.session_state.instruction_pre_passed:
     st.success("✓ Instruction pre-check passed — you can upload your task zip below.")
@@ -474,6 +562,10 @@ with tab_static:
 
 with tab_download:
     st.markdown("Download your QC report — share the HTML with reviewers.")
+    st.caption(
+        "Accepted reference tasks may still fail LLM alignment or show high tracker similarity "
+        "(e.g. matching their own row). Use the **Similarity** and **LLM Alignment** tabs to see why."
+    )
     d1, d2 = st.columns(2)
     with d1:
         st.download_button(

@@ -7,7 +7,6 @@ corpus row before the portal says to change the task.
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -171,13 +170,16 @@ def compare_instruction_to_corpus_full(
     Always returns top-N rows with both scores visible (even below threshold).
     dual_block=True only when BOTH lexical and embedding >= threshold.
     """
+    from config import resolve_embed_model, resolve_openai_api_key
+
     exclude = exclude_keys or set()
     query = (query_instruction or "").strip()
-    api_key = (api_key or "").strip()
+    api_key = (api_key or resolve_openai_api_key()).strip()
+    embed_model = resolve_embed_model(api_key)
     empty_meta = SimilarityRunMeta(
         api_key_present=bool(api_key),
         embedding_ran=False,
-        embed_model=DEFAULT_EMBED_MODEL,
+        embed_model=embed_model,
         embedding_error=None,
         corpus_size=0,
     )
@@ -200,19 +202,19 @@ def compare_instruction_to_corpus_full(
     embedding_error: str | None = None
     embedding_ran = False
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        lex_future = executor.submit(_compute_lexical_scores, query, candidates)
-        sem_future = executor.submit(_compute_semantic_scores, query, candidates, api_key)
-        lexical_scores = lex_future.result()
-        if api_key:
-            try:
-                semantic_scores = sem_future.result()
-                embedding_ran = bool(semantic_scores)
-            except Exception as exc:
-                embedding_error = str(exc)
-                semantic_scores = {}
-        else:
-            embedding_error = "No OPENAI_API_KEY — embedding step skipped"
+    # Run in main thread — avoids Streamlit secrets / API client issues in worker threads.
+    lexical_scores = _compute_lexical_scores(query, candidates)
+    if api_key:
+        try:
+            semantic_scores = _compute_semantic_scores(query, candidates, api_key)
+            embedding_ran = len(semantic_scores) > 0
+            if not embedding_ran:
+                embedding_error = "Embedding API returned no scores."
+        except Exception as exc:
+            embedding_error = str(exc)
+            semantic_scores = {}
+    else:
+        embedding_error = "No OPENAI_API_KEY configured in Streamlit secrets."
 
     hits: list[SimilarityHit] = []
     for key, meta in candidates:
@@ -247,12 +249,10 @@ def compare_instruction_to_corpus_full(
         ),
         reverse=True,
     )
-    from config import resolve_embed_model
-
     meta = SimilarityRunMeta(
         api_key_present=bool(api_key),
         embedding_ran=embedding_ran,
-        embed_model=resolve_embed_model(api_key),
+        embed_model=embed_model,
         embedding_error=embedding_error,
         corpus_size=len(candidates),
     )

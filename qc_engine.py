@@ -682,7 +682,7 @@ def run_instruction_similarity(
     from similarity_engine import compare_instruction_to_corpus_full
 
     notes: list[str] = []
-    api_key = (api_key or "").strip()
+    api_key = (api_key or resolve_openai_api_key()).strip()
     run_meta: dict[str, Any] = {
         "embedding_ran": False,
         "embed_model": resolve_embed_model(api_key),
@@ -702,7 +702,11 @@ def run_instruction_similarity(
         k: {"instruction": v, "trainer": "", "task_name": k}
         for k, v in instructions_corpus.items()
     }
-    exclude = {k for k in meta if exclude_task_name.lower() in k.lower()}
+    exclude = (
+        {k for k in meta if exclude_task_name.lower() in k.lower()}
+        if exclude_task_name.strip()
+        else set()
+    )
 
     result = compare_instruction_to_corpus_full(
         inst_text, meta, exclude_keys=exclude, api_key=api_key, top_n=10,
@@ -841,7 +845,117 @@ def check_instruction_similarity(
         "embed_model": run_meta.get("embed_model", "text-embedding-3-small"),
         "embedding_error": run_meta.get("embedding_error"),
         "corpus_size": run_meta.get("corpus_size", 0),
+        "api_key_present": run_meta.get("api_key_present", False),
+        "api_provider": run_meta.get("api_provider", ""),
     }
+
+
+def instruction_precheck_to_dict(
+    result: dict[str, Any],
+    instruction_text: str,
+    trainer_name: str = "",
+) -> dict[str, Any]:
+    matches = result.get("matches") or []
+    return {
+        "type": "instruction_precheck",
+        "trainer_name": trainer_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "instruction_preview": instruction_text[:500],
+        "instruction_length": len(instruction_text),
+        "blocked": result.get("blocked", False),
+        "change_task": result.get("change_task", False),
+        "message": result.get("message", ""),
+        "corpus_count": result.get("corpus_count", 0),
+        "embedding_ran": result.get("embedding_ran", False),
+        "embed_model": result.get("embed_model", ""),
+        "embedding_error": result.get("embedding_error"),
+        "api_key_present": result.get("api_key_present", False),
+        "api_provider": result.get("api_provider", ""),
+        "dual_threshold_percent": int(INSTRUCTION_SIM_THRESHOLD * 100),
+        "matches": [
+            {
+                "task": m.task_id,
+                "trainer": m.trainer,
+                "lexical_percent": round((m.lexical_score or 0) * 100, 1),
+                "embedding_percent": (
+                    round(m.semantic_score * 100, 1)
+                    if m.semantic_score is not None else None
+                ),
+                "dual_block": m.dual_block,
+                "method": m.method,
+            }
+            for m in matches
+        ],
+        "notes": result.get("notes", []),
+    }
+
+
+def render_instruction_precheck_html(
+    result: dict[str, Any],
+    instruction_text: str,
+    trainer_name: str = "",
+) -> str:
+    import html as html_module
+
+    data = instruction_precheck_to_dict(result, instruction_text, trainer_name)
+    safe_instruction = html_module.escape(instruction_text[:3000])
+    blocked = data["blocked"]
+    color = "#e74c3c" if blocked else "#2ecc71"
+    status = "CHANGE TASK" if blocked else "OK TO PROCEED"
+    rows = ""
+    for m in data["matches"]:
+        emb = m["embedding_percent"]
+        emb_s = f"{emb}%" if emb is not None else "—"
+        flag = "YES" if m["dual_block"] else "No"
+        rows += (
+            f"<tr><td>{m['task']}</td><td>{m['trainer'] or '—'}</td>"
+            f"<td>{m['lexical_percent']}%</td><td>{emb_s}</td>"
+            f"<td>{flag}</td><td>{m['method']}</td></tr>"
+        )
+    if not rows:
+        rows = "<tr><td colspan='6'>No matches returned.</td></tr>"
+
+    embed_status = "Ran" if data["embedding_ran"] else "Did not run"
+    if data["embedding_error"]:
+        embed_status += f" — {data['embedding_error']}"
+
+    notes_html = "".join(f"<li>{n}</li>" for n in data["notes"])
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Instruction Pre-check Report</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 24px; color: #222; }}
+    .summary {{ border: 2px solid {color}; border-radius: 12px; padding: 16px; margin-bottom: 24px; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }}
+    th, td {{ border: 1px solid #ddd; padding: 8px; vertical-align: top; }}
+    th {{ background: #f7f7f7; text-align: left; }}
+    pre {{ background: #f6f8fa; padding: 12px; border-radius: 8px; white-space: pre-wrap; }}
+  </style>
+</head>
+<body>
+  <div class="summary">
+    <h1 style="color:{color}">{status}</h1>
+    <p><strong>Trainer:</strong> {trainer_name or "Not provided"}</p>
+    <p><strong>Generated:</strong> {data["timestamp"]}</p>
+    <p>{data["message"]}</p>
+    <p><strong>Corpus:</strong> {data["corpus_count"]} instructions ·
+       <strong>Embedding:</strong> {embed_status} ({data["embed_model"]}) ·
+       <strong>Dual block threshold:</strong> both ≥ {data["dual_threshold_percent"]}%</p>
+  </div>
+  <h2>Top matches (tracker sheet)</h2>
+  <table>
+    <tr><th>Task</th><th>Trainer</th><th>Lexical</th><th>Embedding</th><th>Change task?</th><th>Method</th></tr>
+    {rows}
+  </table>
+  <h2>Your instruction (preview)</h2>
+  <pre>{safe_instruction}</pre>
+  <h2>Diagnostics</h2>
+  <ul>{notes_html}</ul>
+  <p><em>Note: An accepted reference task can still show high similarity to itself or peers in the tracker — review the match list before changing the task.</em></p>
+</body>
+</html>"""
 
 
 def run_similarity_checks(
