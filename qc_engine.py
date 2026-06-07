@@ -716,6 +716,7 @@ def run_instruction_similarity(
     corpus_meta: dict[str, dict[str, str]] | None = None,
     exclude_task_name: str = "",
     api_key: str = "",
+    tracker_cache: dict[str, Any] | None = None,
 ) -> tuple[list[SimilarityMatch], bool, str, list[str], dict[str, Any]]:
     """Parallel lexical + embedding check. Block only when both >= 60%."""
     from similarity_engine import compare_instruction_to_corpus_full
@@ -748,7 +749,12 @@ def run_instruction_similarity(
     )
 
     result = compare_instruction_to_corpus_full(
-        inst_text, meta, exclude_keys=exclude, api_key=api_key, top_n=10,
+        inst_text,
+        meta,
+        exclude_keys=exclude,
+        api_key=api_key,
+        top_n=10,
+        tracker_cache=tracker_cache,
     )
     hits = result.hits
     sim_meta = result.meta
@@ -826,6 +832,18 @@ def check_instruction_similarity(
     api_key: str = "",
 ) -> dict[str, Any]:
     """Standalone instruction.md check — runs before zip upload."""
+    from portal_cache import tracker_cache_params
+
+    tracker_cache = tracker_cache_params(
+        sheet_url=sheet_url,
+        worksheet=worksheet,
+        task_col=task_col,
+        instruction_col=instruction_col,
+        spec_col="",
+        trainer_col=trainer_col,
+        instruction_col_index=instruction_col_index,
+        corpus_json_path=corpus_json_path,
+    )
     instructions, _, corpus_meta, load_notes = fetch_similarity_corpus(
         sheet_url=sheet_url,
         worksheet=worksheet,
@@ -842,6 +860,7 @@ def check_instruction_similarity(
         corpus_meta=corpus_meta,
         exclude_task_name=exclude_task_name,
         api_key=api_key,
+        tracker_cache=tracker_cache,
     )
     notes = load_notes + notes
 
@@ -1004,6 +1023,7 @@ def run_similarity_checks(
     task_name: str,
     corpus_meta: dict[str, dict[str, str]] | None = None,
     api_key: str = "",
+    tracker_cache: dict[str, Any] | None = None,
 ) -> tuple[list[SimilarityMatch], list[SimilarityMatch], float, bool, str, list[str]]:
     from similarity_engine import tfidf_similarity
 
@@ -1023,6 +1043,7 @@ def run_similarity_checks(
         corpus_meta=corpus_meta,
         exclude_task_name=task_name,
         api_key=api_key,
+        tracker_cache=tracker_cache,
     )
     notes.extend(inst_notes)
 
@@ -1329,6 +1350,18 @@ def assess_task(
 
     notes: list[str] = []
     api_key = openai_api_key.strip() or resolve_openai_api_key()
+    from portal_cache import tracker_cache_params
+
+    tracker_cache = tracker_cache_params(
+        sheet_url=sheet_url,
+        worksheet=worksheet,
+        task_col=task_col,
+        instruction_col=instruction_col,
+        spec_col=spec_col,
+        trainer_col=trainer_col,
+        instruction_col_index=instruction_col_index,
+        corpus_json_path=corpus_json_path,
+    )
 
     instructions_corpus, specs_corpus, corpus_meta, corpus_notes = fetch_similarity_corpus(
         sheet_url=sheet_url,
@@ -1351,6 +1384,7 @@ def assess_task(
             task_name,
             corpus_meta=corpus_meta,
             api_key=api_key,
+            tracker_cache=tracker_cache,
         )
     )
     notes.extend(sim_notes)

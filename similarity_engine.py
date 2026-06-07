@@ -135,6 +135,7 @@ def _compute_semantic_scores(
     query: str,
     candidates: list[tuple[str, dict[str, str]]],
     api_key: str,
+    tracker_cache: dict[str, Any] | None = None,
 ) -> dict[str, float]:
     if not api_key or not candidates:
         return {}
@@ -144,28 +145,33 @@ def _compute_semantic_scores(
     keys = [key for key, _ in candidates]
     corpus_texts = [meta.get("instruction", "") for _, meta in candidates]
 
-    try:
-        from portal_cache import cached_instruction_embeddings, corpus_text_signature
+    if tracker_cache:
+        try:
+            from portal_cache import cached_tracker_embedding_vectors, corpus_text_signature
 
-        signature = corpus_text_signature(list(zip(keys, corpus_texts)))
-        cached_vectors = cached_instruction_embeddings(
-            signature,
-            embed_model,
-            tuple(corpus_texts),
-        )
-        query_emb = _get_embeddings([query], api_key, embed_model)[0]
-        scores: dict[str, float] = {}
-        for idx, key in enumerate(keys):
-            scores[key] = _cosine(query_emb, list(cached_vectors[idx]))
-        return scores
-    except Exception:
-        texts = [query] + corpus_texts
-        embeddings = _get_embeddings(texts, api_key, embed_model)
-        source_emb = embeddings[0]
-        scores = {}
-        for idx, key in enumerate(keys):
-            scores[key] = _cosine(source_emb, embeddings[idx + 1])
-        return scores
+            signature = corpus_text_signature(list(zip(keys, corpus_texts)))
+            cached_keys, cached_vectors = cached_tracker_embedding_vectors(
+                signature,
+                embed_model,
+                **tracker_cache,
+            )
+            key_to_vector = dict(zip(cached_keys, cached_vectors))
+            query_emb = _get_embeddings([query], api_key, embed_model)[0]
+            return {
+                key: _cosine(query_emb, list(key_to_vector[key]))
+                for key in keys
+                if key in key_to_vector
+            }
+        except Exception:
+            pass
+
+    texts = [query] + corpus_texts
+    embeddings = _get_embeddings(texts, api_key, embed_model)
+    source_emb = embeddings[0]
+    return {
+        key: _cosine(source_emb, embeddings[idx + 1])
+        for idx, key in enumerate(keys)
+    }
 
 
 def compare_instruction_to_corpus(
@@ -194,6 +200,7 @@ def compare_instruction_to_corpus_full(
     api_key: str = "",
     top_n: int = 10,
     threshold: float = INSTRUCTION_SIM_THRESHOLD,
+    tracker_cache: dict[str, Any] | None = None,
 ) -> SimilarityCompareResult:
     """
     Run lexical and embedding similarity in parallel against the full corpus.
@@ -236,7 +243,9 @@ def compare_instruction_to_corpus_full(
     lexical_scores = _compute_lexical_scores(query, candidates)
     if api_key:
         try:
-            semantic_scores = _compute_semantic_scores(query, candidates, api_key)
+            semantic_scores = _compute_semantic_scores(
+                query, candidates, api_key, tracker_cache=tracker_cache,
+            )
             embedding_ran = len(semantic_scores) > 0
             if not embedding_ran:
                 embedding_error = "Embedding API returned no scores."

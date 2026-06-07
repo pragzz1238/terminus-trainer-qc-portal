@@ -88,6 +88,8 @@ if "instruction_pre_result" not in st.session_state:
     st.session_state.instruction_pre_result = None
 if "qc_cache" not in st.session_state:
     st.session_state.qc_cache = None
+if "show_pre_downloads" not in st.session_state:
+    st.session_state.show_pre_downloads = False
 
 provider = api_provider_label() if llm_ready else "—"
 render_topbar(llm_ready, provider, llm_model)
@@ -206,6 +208,7 @@ if check_inst_btn:
             )
         st.session_state.instruction_pre_text = instruction_text
         st.session_state.instruction_pre_result = pre_result
+        st.session_state.show_pre_downloads = False
 
         if pre_result.get("embedding_ran"):
             st.info(
@@ -280,45 +283,51 @@ if check_inst_btn:
         )
 
 elif st.session_state.instruction_pre_result:
-    qe = _qc_engine()
     pre_result = st.session_state.instruction_pre_result
-    st.caption("Last instruction pre-check result (re-run to refresh)")
+    blocked = pre_result.get("blocked")
+    status = "blocked" if blocked else "passed"
+    st.caption(f"Last instruction check: **{status}** — run again to refresh or download reports.")
     if pre_result.get("matches"):
-        st.dataframe(
-            [
-                {
-                    "Task": m.task_id,
-                    "Trainer": m.trainer or "—",
-                    "Word overlap %": round((m.lexical_score or 0) * 100, 1),
-                    "Meaning %": (
-                        round(m.semantic_score * 100, 1)
-                        if m.semantic_score is not None else "—"
-                    ),
-                    "Too similar?": "YES" if m.dual_block else "No",
-                }
-                for m in pre_result["matches"]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-    pre_html = qe.render_instruction_precheck_html(
-        pre_result, st.session_state.instruction_pre_text, trainer_name
-    )
-    pre_json = json.dumps(
-        qe.instruction_precheck_to_dict(
+        with st.expander("Previous match table", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Task": m.task_id,
+                        "Trainer": m.trainer or "—",
+                        "Word overlap %": round((m.lexical_score or 0) * 100, 1),
+                        "Meaning %": (
+                            round(m.semantic_score * 100, 1)
+                            if m.semantic_score is not None else "—"
+                        ),
+                        "Too similar?": "YES" if m.dual_block else "No",
+                    }
+                    for m in pre_result["matches"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+    if st.button("Prepare instruction report downloads", key="prep_pre_dl"):
+        st.session_state.show_pre_downloads = True
+    if st.session_state.get("show_pre_downloads"):
+        qe = _qc_engine()
+        pre_html = qe.render_instruction_precheck_html(
             pre_result, st.session_state.instruction_pre_text, trainer_name
-        ),
-        indent=2,
-    )
-    render_download_panel(
-        pre_html,
-        pre_json,
-        "instruction_precheck_report.html",
-        "instruction_precheck_report.json",
-        title="Instruction pre-check report",
-        subtitle="From your most recent instruction check.",
-        key_prefix="dl_pre_persist",
-    )
+        )
+        pre_json = json.dumps(
+            qe.instruction_precheck_to_dict(
+                pre_result, st.session_state.instruction_pre_text, trainer_name
+            ),
+            indent=2,
+        )
+        render_download_panel(
+            pre_html,
+            pre_json,
+            "instruction_precheck_report.html",
+            "instruction_precheck_report.json",
+            title="Instruction pre-check report",
+            subtitle="From your most recent instruction check.",
+            key_prefix="dl_pre_persist",
+        )
 
 if st.session_state.instruction_pre_passed:
     st.success("Instruction check passed — proceed to task zip upload.")
@@ -415,32 +424,27 @@ if run_qc:
     progress.progress(100, text="Done!")
     status.empty()
 
-    report_json = json.dumps(qe.report_to_dict(report), indent=2)
-    report_html = qe.render_html_report(report)
     safe_name = report.task_name.replace(" ", "-")
     st.session_state.qc_cache = {
         "upload_sig": upload_sig,
         "report": report,
-        "report_json": report_json,
-        "report_html": report_html,
         "safe_name": safe_name,
     }
 
 cache = st.session_state.qc_cache
 if not run_qc:
     if cache and cache.get("upload_sig") == upload_sig:
-        qe = _qc_engine()
         report = cache["report"]
-        report_json = cache["report_json"]
-        report_html = cache["report_html"]
         safe_name = cache["safe_name"]
     else:
         st.stop()
 else:
     report = st.session_state.qc_cache["report"]
-    report_json = st.session_state.qc_cache["report_json"]
-    report_html = st.session_state.qc_cache["report_html"]
     safe_name = st.session_state.qc_cache["safe_name"]
+
+qe = _qc_engine()
+report_json = json.dumps(qe.report_to_dict(report), indent=2)
+report_html = qe.render_html_report(report)
 
 render_workflow_stepper(2)
 render_section_header(
