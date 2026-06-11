@@ -114,6 +114,123 @@ def similarity_flag_label(match: SimilarityMatch) -> str:
     return "YES"
 
 
+def _html_comparison_styles() -> str:
+    return """
+    pre.instr-body {
+      background: #f6f8fa; padding: 14px 16px; border-radius: 8px;
+      white-space: pre-wrap; word-break: break-word;
+      font-size: 13px; line-height: 1.55; margin: 0;
+      border: 1px solid #e2e8f0; max-height: none;
+    }
+    .match-card {
+      border: 1px solid #cbd5e1; border-radius: 12px;
+      padding: 14px 16px 18px; margin: 20px 0;
+      background: #fff;
+    }
+    .match-card.flagged { border-color: #f87171; background: #fffbfb; }
+    .match-scores {
+      font-size: 15px; margin-bottom: 12px; padding-bottom: 10px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .compare-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+    }
+    .instr-label {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; color: #64748b; margin-bottom: 6px;
+    }
+    @media (max-width: 960px) { .compare-grid { grid-template-columns: 1fr; } }
+"""
+
+
+def _resolve_match_instruction_text(
+    task_id: str,
+    matched_instruction: str,
+    tracker_instructions: dict[str, str] | None,
+) -> str:
+    text = (matched_instruction or "").strip()
+    if text:
+        return text
+    if tracker_instructions:
+        return (tracker_instructions.get(task_id) or "").strip()
+    return ""
+
+
+def _html_instruction_comparison_section(
+    your_instruction: str,
+    matches: list[Any],
+    tracker_instructions: dict[str, str] | None = None,
+) -> str:
+    import html as html_module
+
+    if not matches:
+        return "<p><em>No tracker matches returned.</em></p>"
+
+    safe_yours = html_module.escape(your_instruction or "")
+    yours_len = len(your_instruction or "")
+    blocks = ""
+
+    for m in matches:
+        if isinstance(m, SimilarityMatch):
+            task_id = m.task_id
+            trainer = m.trainer or "—"
+            lex = round((m.lexical_score or 0) * 100, 1)
+            emb_val = (
+                round(m.semantic_score * 100, 1)
+                if m.semantic_score is not None else None
+            )
+            flagged = m.dual_block
+            flag = similarity_flag_label(m)
+            raw_match = _resolve_match_instruction_text(
+                task_id, m.matched_instruction, tracker_instructions,
+            )
+        else:
+            task_id = str(m.get("task", ""))
+            trainer = m.get("trainer") or "—"
+            lex = m.get("lexical_percent", 0)
+            emb_val = m.get("embedding_percent")
+            flagged = bool(m.get("dual_block"))
+            flag = m.get("flag_label") or ("YES" if flagged else "No")
+            raw_match = _resolve_match_instruction_text(
+                task_id,
+                str(m.get("matched_instruction") or ""),
+                tracker_instructions,
+            )
+
+        emb_s = f"{emb_val}%" if emb_val is not None else "—"
+        safe_match = html_module.escape(raw_match) if raw_match else ""
+        match_len = len(raw_match)
+        card_cls = "match-card flagged" if flagged else "match-card"
+        match_body = (
+            safe_match
+            if safe_match
+            else "<em>Tracker instruction not loaded — re-run the check and download again.</em>"
+        )
+
+        blocks += f"""
+<section class="{card_cls}" id="review-{html_module.escape(task_id)}">
+  <div class="match-scores">
+    👁 <strong>{html_module.escape(task_id)}</strong>
+    · Trainer: {html_module.escape(trainer)}
+    · Word overlap: <strong>{lex}%</strong>
+    · Meaning: <strong>{emb_s}</strong>
+    · Flagged: <strong>{html_module.escape(flag)}</strong>
+  </div>
+  <div class="compare-grid">
+    <div class="instr-col">
+      <div class="instr-label">Your instruction · {yours_len:,} characters</div>
+      <pre class="instr-body">{safe_yours}</pre>
+    </div>
+    <div class="instr-col">
+      <div class="instr-label">Tracker instruction · {match_len:,} characters</div>
+      <pre class="instr-body">{match_body}</pre>
+    </div>
+  </div>
+</section>"""
+
+    return blocks
+
+
 @dataclass
 class QCReport:
     task_name: str
@@ -1046,8 +1163,10 @@ def instruction_precheck_to_dict(
     trainer_name: str = "",
 ) -> dict[str, Any]:
     matches = result.get("matches") or []
+    tracker_map = result.get("tracker_instructions") or {}
     return {
         "type": "instruction_precheck",
+        "report_format": "full_comparison_v2",
         "trainer_name": trainer_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "instruction_preview": instruction_text[:500],
@@ -1078,7 +1197,9 @@ def instruction_precheck_to_dict(
                 "block_reason": m.block_reason,
                 "flag_label": similarity_flag_label(m),
                 "method": m.method,
-                "matched_instruction": m.matched_instruction,
+                "matched_instruction": (
+                    m.matched_instruction or tracker_map.get(m.task_id, "")
+                ),
             }
             for m in matches
         ],
@@ -1094,81 +1215,75 @@ def render_instruction_precheck_html(
     import html as html_module
 
     data = instruction_precheck_to_dict(result, instruction_text, trainer_name)
-    safe_instruction = html_module.escape(instruction_text)
     blocked = data["blocked"]
     color = "#e74c3c" if blocked else "#2ecc71"
     status = "CHANGE TASK" if blocked else "OK TO PROCEED"
+    tracker_map = data.get("tracker_instructions") or {}
+
     rows = ""
-    review_sections = ""
     for m in data["matches"]:
         emb = m["embedding_percent"]
         emb_s = f"{emb}%" if emb is not None else "—"
         flag = m.get("flag_label") or ("YES" if m["dual_block"] else "No")
+        task_id = html_module.escape(m["task"])
         rows += (
-            f"<tr><td>{m['task']}</td><td>{m['trainer'] or '—'}</td>"
+            f"<tr><td>{task_id}</td><td>{html_module.escape(m['trainer'] or '—')}</td>"
             f"<td>{m['lexical_percent']}%</td><td>{emb_s}</td>"
-            f"<td>{flag}</td><td>{m['method']}</td>"
-            f"<td><a href=\"#review-{html_module.escape(m['task'])}\" title=\"Review\">👁</a></td></tr>"
+            f"<td>{html_module.escape(flag)}</td>"
+            f"<td><a href=\"#review-{task_id}\">👁 Compare</a></td></tr>"
         )
-        safe_match = html_module.escape(m.get("matched_instruction") or "")
-        review_sections += f"""
-  <details id="review-{html_module.escape(m['task'])}" class="review-block" {"open" if m['dual_block'] else ""}>
-    <summary>👁 Compare with <strong>{html_module.escape(m['task'])}</strong>
-      — word {m['lexical_percent']}%, meaning {emb_s} · {flag}</summary>
-    <div class="compare-grid">
-      <div><h3>Your instruction</h3><pre>{safe_instruction}</pre></div>
-      <div><h3>Tracker match ({html_module.escape(m['trainer'] or 'unknown')})</h3><pre>{safe_match}</pre></div>
-    </div>
-  </details>"""
     if not rows:
-        rows = "<tr><td colspan='7'>No matches returned.</td></tr>"
-    if not review_sections:
-        review_sections = "<p><em>No tracker matches to compare.</em></p>"
+        rows = "<tr><td colspan='6'>No matches returned.</td></tr>"
+
+    comparison_html = _html_instruction_comparison_section(
+        instruction_text,
+        data["matches"],
+        tracker_map,
+    )
 
     embed_status = "Ran" if data["embedding_ran"] else "Did not run"
     if data["embedding_error"]:
         embed_status += f" — {data['embedding_error']}"
 
-    notes_html = "".join(f"<li>{n}</li>" for n in data["notes"])
+    notes_html = "".join(f"<li>{html_module.escape(n)}</li>" for n in data["notes"])
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Instruction Pre-check Report</title>
+  <title>Instruction Similarity Report</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 24px; color: #222; }}
+    body {{ font-family: Arial, sans-serif; margin: 24px; color: #222; max-width: 1400px; }}
     .summary {{ border: 2px solid {color}; border-radius: 12px; padding: 16px; margin-bottom: 24px; }}
     table {{ border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }}
     th, td {{ border: 1px solid #ddd; padding: 8px; vertical-align: top; }}
     th {{ background: #f7f7f7; text-align: left; }}
-    pre {{ background: #f6f8fa; padding: 12px; border-radius: 8px; white-space: pre-wrap; font-size: 13px; line-height: 1.45; }}
-    .review-block {{ border: 1px solid #dde3ea; border-radius: 10px; padding: 10px 14px; margin: 12px 0; }}
-    .review-block summary {{ cursor: pointer; font-weight: 600; }}
-    .compare-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }}
-    @media (max-width: 900px) {{ .compare-grid {{ grid-template-columns: 1fr; }} }}
+    {_html_comparison_styles()}
   </style>
 </head>
 <body>
   <div class="summary">
     <h1 style="color:{color}">{status}</h1>
-    <p><strong>Trainer:</strong> {trainer_name or "Not provided"}</p>
+    <p><strong>Trainer:</strong> {html_module.escape(trainer_name or "Not provided")}</p>
     <p><strong>Generated:</strong> {data["timestamp"]}</p>
-    <p>{data["message"]}</p>
+    <p>{html_module.escape(data["message"])}</p>
     <p><strong>Corpus:</strong> {data["corpus_count"]} instructions ·
-       <strong>Embedding:</strong> {embed_status} ({data["embed_model"]}) ·
+       <strong>Embedding:</strong> {html_module.escape(embed_status)} ({html_module.escape(data["embed_model"])}) ·
        <strong>Flag rules:</strong> both ≥ {data["dual_threshold_percent"]}% OR meaning ≥ {data["semantic_block_threshold_percent"]}%</p>
   </div>
-  <h2>Top matches (tracker sheet)</h2>
+
+  <h2>Similarity scores (top matches)</h2>
   <table>
-    <tr><th>Task</th><th>Trainer</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Method</th><th>👁</th></tr>
+    <tr><th>Task</th><th>Trainer</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Review</th></tr>
     {rows}
   </table>
-  <h2>👁 Instruction comparison</h2>
-  <p>Open each row below to read your instruction next to the tracker match and decide if the task is truly too similar.</p>
-  {review_sections}
+
+  <h2>👁 Full instruction comparison</h2>
+  <p>Each block shows <strong>your complete instruction</strong> next to the <strong>full tracker instruction</strong> for that row, with scores in the header. Use this to decide whether the task is truly too similar.</p>
+  {comparison_html}
+
   <h2>Diagnostics</h2>
   <ul>{notes_html}</ul>
-  <p><em>Note: An accepted reference task can still show high similarity to itself or peers in the tracker — review the match list before changing the task.</em></p>
+  <p><em>Re-download after re-running the check if tracker instructions appear empty.</em></p>
 </body>
 </html>"""
 
@@ -1771,27 +1886,11 @@ def render_html_report(report: QCReport) -> str:
             )
         return rows
 
-    inst_review_html = ""
-    safe_yours = html_module.escape(report.submitted_instruction)
-    for match in report.instruction_matches:
-        emb = (
-            round(match.semantic_score * 100, 1)
-            if match.semantic_score is not None else "—"
-        )
-        lex = round((match.lexical_score or 0) * 100, 1)
-        flag = similarity_flag_label(match)
-        safe_match = html_module.escape(match.matched_instruction)
-        inst_review_html += f"""
-  <details id="review-{html_module.escape(match.task_id)}" {"open" if match.dual_block else ""}>
-    <summary>👁 Compare with <strong>{html_module.escape(match.task_id)}</strong>
-      — word {lex}%, meaning {emb}% · {flag}</summary>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
-      <div><h3>Your instruction.md</h3><pre style="white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px">{safe_yours}</pre></div>
-      <div><h3>Tracker ({html_module.escape(match.trainer or 'unknown')})</h3><pre style="white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px">{safe_match}</pre></div>
-    </div>
-  </details>"""
-    if not inst_review_html:
-        inst_review_html = "<p><em>No instruction matches.</em></p>"
+    inst_review_html = _html_instruction_comparison_section(
+        report.submitted_instruction,
+        report.instruction_matches,
+        {m.task_id: m.matched_instruction for m in report.instruction_matches},
+    )
 
     llm_sections = ""
     if report.llm_results:
@@ -1851,6 +1950,7 @@ def render_html_report(report: QCReport) -> str:
     .fail {{ background: #e74c3c; }}
     .skip {{ background: #95a5a6; }}
     .meta {{ color: #666; }}
+    {_html_comparison_styles()}
   </style>
 </head>
 <body>
@@ -1874,12 +1974,13 @@ def render_html_report(report: QCReport) -> str:
   </table>
 
   <h2>Instruction Similarity (both ≥ {DUAL_BLOCK_PCT}% OR meaning ≥ {SEMANTIC_BLOCK_PCT}%)</h2>
-  {f'<p style="color:#e74c3c;font-weight:700">{report.instruction_block_message}</p>' if report.instruction_blocked else ''}
+  {f'<p style="color:#e74c3c;font-weight:700">{html_module.escape(report.instruction_block_message)}</p>' if report.instruction_blocked else ''}
   <table>
-    <tr><th>Task</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Trainer</th><th>👁</th></tr>
+    <tr><th>Task</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Trainer</th><th>Review</th></tr>
     {sim_rows(report.instruction_matches)}
   </table>
-  <h3>👁 Instruction comparison</h3>
+  <h3>👁 Full instruction comparison</h3>
+  <p>Complete instruction.md next to each tracker match — scores are in each block header.</p>
   {inst_review_html}
 
   <h2>SPEC Similarity</h2>
