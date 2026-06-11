@@ -205,82 +205,87 @@ with tab_instruction:
             )
         else:
             qe = _qc_engine()
-            with st.spinner("Comparing your instruction against the team tracker…"):
-                pre_result = qe.check_instruction_similarity(
-                    instruction_text=instruction_text,
-                    sheet_url=sheet_url,
-                    worksheet=worksheet,
-                    task_col=task_col,
-                    instruction_col=instruction_col,
-                    trainer_col=trainer_col,
-                    instruction_col_index=instruction_col_index,
-                    corpus_json_path=corpus_path if not sheet_url.strip() else "",
-                    api_key=resolve_openai_api_key(),
-                )
-        st.session_state.instruction_pre_text = instruction_text
-        st.session_state.instruction_pre_result = pre_result
-        st.session_state.show_pre_downloads = False
-        if pre_result.get("tracker_instructions"):
-            st.session_state.tracker_instruction_cache = pre_result["tracker_instructions"]
-
-            if pre_result.get("embedding_ran"):
-                st.info(
-                    f"Meaning check completed ({pre_result.get('api_provider', 'OpenAI')}) "
-                    f"against **{pre_result.get('corpus_size', 0)}** tracker instructions."
-                )
-            elif pre_result.get("embedding_error"):
-                st.warning(f"Meaning check did not run: {pre_result['embedding_error']}")
-            elif not pre_result.get("api_key_present") and not llm_ready:
-                st.warning(
-                    "Meaning check did not run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
-                    "Only word-overlap was checked."
-                )
-            elif not pre_result.get("api_key_present"):
-                st.warning("API key missing for meaning check (full zip QC may still work).")
+            try:
+                with st.spinner("Comparing your instruction against the team tracker…"):
+                    pre_result = qe.check_instruction_similarity(
+                        instruction_text=instruction_text,
+                        sheet_url=sheet_url,
+                        worksheet=worksheet,
+                        task_col=task_col,
+                        instruction_col=instruction_col,
+                        trainer_col=trainer_col,
+                        instruction_col_index=instruction_col_index,
+                        corpus_json_path=corpus_path if not sheet_url.strip() else "",
+                        api_key=resolve_openai_api_key(),
+                    )
+            except Exception as exc:
+                st.error("Instruction check failed — see details below.")
+                st.exception(exc)
             else:
-                st.warning(
-                    "Meaning check did not complete — see **Sheet load details** and download the report below."
+                st.session_state.instruction_pre_text = instruction_text
+                st.session_state.instruction_pre_result = pre_result
+                st.session_state.show_pre_downloads = False
+                if pre_result.get("tracker_instructions"):
+                    st.session_state.tracker_instruction_cache = pre_result["tracker_instructions"]
+
+                if pre_result.get("embedding_ran"):
+                    st.info(
+                        f"Meaning check completed ({pre_result.get('api_provider', 'OpenAI')}) "
+                        f"against **{pre_result.get('corpus_size', 0)}** tracker instructions."
+                    )
+                elif pre_result.get("embedding_error"):
+                    st.warning(f"Meaning check did not run: {pre_result['embedding_error']}")
+                elif not pre_result.get("api_key_present") and not llm_ready:
+                    st.warning(
+                        "Meaning check did not run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
+                        "Only word-overlap was checked."
+                    )
+                elif not pre_result.get("api_key_present"):
+                    st.warning("API key missing for meaning check (full zip QC may still work).")
+                else:
+                    st.warning(
+                        "Meaning check did not complete — see **Sheet load details** and download the report below."
+                    )
+
+                corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
+                if corpus_count:
+                    st.caption(f"Compared against **{corpus_count}** reference instructions.")
+
+                if pre_result.get("notes"):
+                    with st.expander("Sheet load details", expanded=corpus_count == 0):
+                        for note in pre_result["notes"]:
+                            st.write(f"- {note}")
+
+                if pre_result.get("blocked"):
+                    st.error(pre_result.get("message") or qe.CHANGE_TASK_MESSAGE)
+                elif corpus_count == 0:
+                    st.error(pre_result.get("message", "No reference corpus loaded."))
+                else:
+                    st.success(pre_result.get("message", "Instruction check passed."))
+
+                if pre_result.get("matches"):
+                    render_similarity_match_table(pre_result["matches"])
+                    render_similarity_instruction_reviews(
+                        instruction_text,
+                        pre_result["matches"],
+                        key_prefix="pre_inst",
+                        tracker_instructions=pre_result.get("tracker_instructions"),
+                    )
+
+                pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
+                pre_json = json.dumps(
+                    qe.instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
+                    indent=2,
                 )
-
-            corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
-            if corpus_count:
-                st.caption(f"Compared against **{corpus_count}** reference instructions.")
-
-            if pre_result.get("notes"):
-                with st.expander("Sheet load details", expanded=corpus_count == 0):
-                    for note in pre_result["notes"]:
-                        st.write(f"- {note}")
-
-            if pre_result.get("blocked"):
-                st.error(pre_result.get("message") or qe.CHANGE_TASK_MESSAGE)
-            elif corpus_count == 0:
-                st.error(pre_result.get("message", "No reference corpus loaded."))
-            else:
-                st.success(pre_result.get("message", "Instruction check passed."))
-
-            if pre_result.get("matches"):
-                render_similarity_match_table(pre_result["matches"])
-                render_similarity_instruction_reviews(
-                    instruction_text,
-                    pre_result["matches"],
-                    key_prefix="pre_inst",
-                    tracker_instructions=pre_result.get("tracker_instructions"),
+                render_download_panel(
+                    pre_html,
+                    pre_json,
+                    "instruction_precheck_report.html",
+                    "instruction_precheck_report.json",
+                    title="Instruction similarity report",
+                    subtitle="Top matches, 👁 side-by-side instruction review, and tracker load details.",
+                    key_prefix="dl_pre",
                 )
-
-            pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
-            pre_json = json.dumps(
-                qe.instruction_precheck_to_dict(pre_result, instruction_text, trainer_name),
-                indent=2,
-            )
-            render_download_panel(
-                pre_html,
-                pre_json,
-                "instruction_precheck_report.html",
-                "instruction_precheck_report.json",
-                title="Instruction similarity report",
-                subtitle="Top matches, 👁 side-by-side instruction review, and tracker load details.",
-                key_prefix="dl_pre",
-            )
 
     elif st.session_state.instruction_pre_result:
         pre_result = st.session_state.instruction_pre_result
