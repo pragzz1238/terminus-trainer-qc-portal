@@ -1023,6 +1023,11 @@ def check_instruction_similarity(
         "blocked": blocked,
         "message": pass_message,
         "matches": matches,
+        "query_instruction": instruction_text,
+        "tracker_instructions": {
+            m.task_id: (m.matched_instruction or instructions.get(m.task_id, ""))
+            for m in matches
+        },
         "notes": notes,
         "change_task": blocked,
         "corpus_count": len(instructions),
@@ -1059,6 +1064,7 @@ def instruction_precheck_to_dict(
         "api_provider": result.get("api_provider", ""),
         "dual_threshold_percent": DUAL_BLOCK_PCT,
         "semantic_block_threshold_percent": SEMANTIC_BLOCK_PCT,
+        "tracker_instructions": result.get("tracker_instructions", {}),
         "matches": [
             {
                 "task": m.task_id,

@@ -217,9 +217,11 @@ with tab_instruction:
                     corpus_json_path=corpus_path if not sheet_url.strip() else "",
                     api_key=resolve_openai_api_key(),
                 )
-            st.session_state.instruction_pre_text = instruction_text
-            st.session_state.instruction_pre_result = pre_result
-            st.session_state.show_pre_downloads = False
+        st.session_state.instruction_pre_text = instruction_text
+        st.session_state.instruction_pre_result = pre_result
+        st.session_state.show_pre_downloads = False
+        if pre_result.get("tracker_instructions"):
+            st.session_state.tracker_instruction_cache = pre_result["tracker_instructions"]
 
             if pre_result.get("embedding_ran"):
                 st.info(
@@ -262,6 +264,7 @@ with tab_instruction:
                     instruction_text,
                     pre_result["matches"],
                     key_prefix="pre_inst",
+                    tracker_instructions=pre_result.get("tracker_instructions"),
                 )
 
             pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
@@ -291,6 +294,10 @@ with tab_instruction:
                     st.session_state.instruction_pre_text,
                     pre_result["matches"],
                     key_prefix="pre_persist",
+                    tracker_instructions=(
+                        pre_result.get("tracker_instructions")
+                        or st.session_state.get("tracker_instruction_cache")
+                    ),
                 )
         if st.button("Prepare instruction report downloads", key="prep_pre_dl"):
             st.session_state.show_pre_downloads = True
@@ -582,6 +589,9 @@ with tab_full_qc:
                         report.submitted_instruction,
                         report.instruction_matches,
                         key_prefix="qc_sim",
+                        tracker_instructions={
+                            m.task_id: m.matched_instruction for m in report.instruction_matches
+                        },
                     )
                 if report.spec_matches:
                     st.markdown("**SPEC.md matches (secondary)**")

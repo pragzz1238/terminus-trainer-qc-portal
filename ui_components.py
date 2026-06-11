@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html as html_module
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +194,23 @@ def inject_global_css() -> None:
     }
     .t-download h3 { margin: 0 0 0.3rem 0; color: #1e3a8a; font-size: 1rem; font-weight: 700; }
     .t-download p { margin: 0; color: var(--t-muted); font-size: 0.88rem; }
+
+    .t-instr-scroll {
+        max-height: min(72vh, 720px);
+        overflow: auto;
+        background: #f8fafc;
+        border: 1px solid var(--t-border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin: 0.35rem 0 0.75rem 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--t-text);
+    }
+    .t-instr-meta { color: var(--t-muted); font-size: 0.8rem; margin: 0 0 0.25rem 0; }
 
     .t-footer {
         margin-top: 2rem; padding-top: 1rem;
@@ -453,6 +471,27 @@ def _similarity_flag_label(match: Any) -> str:
     return "YES"
 
 
+def _render_full_instruction(text: str) -> None:
+    safe = html_module.escape(text or "")
+    if not safe.strip():
+        st.warning("No instruction text available — re-run the check to reload from the tracker.")
+        return
+    st.markdown(f'<div class="t-instr-scroll">{safe}</div>', unsafe_allow_html=True)
+
+
+def _resolve_tracker_instruction(
+    match: Any,
+    tracker_instructions: dict[str, str] | None = None,
+) -> str:
+    direct = (getattr(match, "matched_instruction", "") or "").strip()
+    if direct:
+        return direct
+    task_id = getattr(match, "task_id", "")
+    if tracker_instructions and task_id:
+        return (tracker_instructions.get(task_id) or "").strip()
+    return ""
+
+
 def render_similarity_match_table(matches: list[Any]) -> None:
     if not matches:
         return
@@ -467,7 +506,6 @@ def render_similarity_match_table(matches: list[Any]) -> None:
                     if m.semantic_score is not None else "—"
                 ),
                 "Flagged?": _similarity_flag_label(m),
-                "👁 Review": "👁",
             }
             for m in matches
         ],
@@ -481,45 +519,68 @@ def render_similarity_instruction_reviews(
     matches: list[Any],
     *,
     key_prefix: str = "sim",
-    max_reviews: int = 8,
+    max_reviews: int = 10,
+    tracker_instructions: dict[str, str] | None = None,
 ) -> None:
     if not matches or not (your_instruction or "").strip():
         return
-    st.markdown("**👁 Review instructions side-by-side**")
+
+    st.markdown("**👁 Compare full instructions**")
     st.caption(
-        "Open each match to read your text next to the tracker instruction and judge "
-        "whether the task is truly too similar."
+        "Select a tracker match below — both prompts show in full (scroll inside each panel)."
     )
-    for i, m in enumerate(matches[:max_reviews]):
-        lex = round((m.lexical_score or 0) * 100, 1)
-        sem_pct = (
+
+    options = list(range(min(len(matches), max_reviews)))
+    labels = []
+    for i in options:
+        m = matches[i]
+        sem = (
             round(m.semantic_score * 100, 1)
             if m.semantic_score is not None else None
         )
-        sem_label = f"{sem_pct}%" if sem_pct is not None else "—"
-        flag = _similarity_flag_label(m)
-        title = f"👁 {m.task_id} · meaning {sem_label} · word {lex}% · {flag}"
-        with st.expander(title, expanded=bool(getattr(m, "dual_block", False) and i == 0)):
-            left, right = st.columns(2)
-            with left:
-                st.markdown("**Your instruction**")
-                st.text_area(
-                    "your_instruction",
-                    value=your_instruction,
-                    height=300,
-                    disabled=True,
-                    label_visibility="collapsed",
-                    key=f"{key_prefix}_yours_{i}",
+        sem_s = f"{sem}%" if sem is not None else "—"
+        lex = round((m.lexical_score or 0) * 100, 1)
+        labels.append(f"👁 {m.task_id} · meaning {sem_s} · word {lex}% · {_similarity_flag_label(m)}")
+
+    pick = st.selectbox(
+        "Tracker match to compare",
+        options,
+        format_func=lambda i: labels[i],
+        key=f"{key_prefix}_pick",
+    )
+    m = matches[pick]
+    tracker_text = _resolve_tracker_instruction(m, tracker_instructions)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown(
+            f'<p class="t-instr-meta"><strong>Your instruction</strong> · '
+            f"{len(your_instruction):,} characters</p>",
+            unsafe_allow_html=True,
+        )
+        _render_full_instruction(your_instruction)
+    with right:
+        st.markdown(
+            f'<p class="t-instr-meta"><strong>Tracker: {html_module.escape(m.task_id)}</strong>'
+            f" · {html_module.escape(m.trainer or 'unknown trainer')}"
+            f" · {len(tracker_text):,} characters</p>",
+            unsafe_allow_html=True,
+        )
+        _render_full_instruction(tracker_text)
+
+    if len(matches) > 1:
+        with st.expander(f"Other matches ({len(matches) - 1} more)", expanded=False):
+            for i, other in enumerate(matches[:max_reviews]):
+                if i == pick:
+                    continue
+                sem = (
+                    round(other.semantic_score * 100, 1)
+                    if other.semantic_score is not None else "—"
                 )
-            with right:
-                st.markdown(f"**Tracker match** ({m.trainer or 'unknown trainer'})")
-                st.text_area(
-                    "tracker_instruction",
-                    value=getattr(m, "matched_instruction", "") or "",
-                    height=300,
-                    disabled=True,
-                    label_visibility="collapsed",
-                    key=f"{key_prefix}_tracker_{i}",
+                st.markdown(
+                    f"- **{other.task_id}** · meaning {sem}% · "
+                    f"word {round((other.lexical_score or 0) * 100, 1)}% · "
+                    f"{_similarity_flag_label(other)}"
                 )
 
 
