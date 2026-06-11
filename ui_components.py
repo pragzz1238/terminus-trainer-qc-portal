@@ -456,16 +456,33 @@ def _render_full_instruction(text: str) -> None:
     st.markdown(f'<div class="t-instr-scroll">{safe}</div>', unsafe_allow_html=True)
 
 
+def _match_task_id(match: Any) -> str:
+    if isinstance(match, dict):
+        return str(match.get("task_id") or match.get("task") or "").strip()
+    return str(getattr(match, "task_id", "") or "").strip()
+
+
+def _match_matched_instruction(match: Any) -> str:
+    if isinstance(match, dict):
+        return str(match.get("matched_instruction") or "").strip()
+    return str(getattr(match, "matched_instruction", "") or "").strip()
+
+
 def _resolve_tracker_instruction(
     match: Any,
     tracker_instructions: dict[str, str] | None = None,
+    corpus_instructions: dict[str, str] | None = None,
 ) -> str:
-    direct = (getattr(match, "matched_instruction", "") or "").strip()
+    direct = _match_matched_instruction(match)
     if direct:
         return direct
-    task_id = getattr(match, "task_id", "")
+    task_id = _match_task_id(match)
     if tracker_instructions and task_id:
-        return (tracker_instructions.get(task_id) or "").strip()
+        text = (tracker_instructions.get(task_id) or "").strip()
+        if text:
+            return text
+    if corpus_instructions and task_id:
+        return (corpus_instructions.get(task_id) or "").strip()
     return ""
 
 
@@ -498,6 +515,7 @@ def render_similarity_instruction_reviews(
     key_prefix: str = "sim",
     max_reviews: int = 10,
     tracker_instructions: dict[str, str] | None = None,
+    corpus_instructions: dict[str, str] | None = None,
 ) -> None:
     if not matches or not (your_instruction or "").strip():
         return
@@ -526,7 +544,11 @@ def render_similarity_instruction_reviews(
         key=f"{key_prefix}_pick",
     )
     m = matches[pick]
-    tracker_text = _resolve_tracker_instruction(m, tracker_instructions)
+    tracker_text = _resolve_tracker_instruction(
+        m,
+        tracker_instructions,
+        corpus_instructions,
+    )
 
     left, right = st.columns(2)
     with left:

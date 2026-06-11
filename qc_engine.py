@@ -147,13 +147,42 @@ def _resolve_match_instruction_text(
     task_id: str,
     matched_instruction: str,
     tracker_instructions: dict[str, str] | None,
+    corpus_instructions: dict[str, str] | None = None,
 ) -> str:
     text = (matched_instruction or "").strip()
     if text:
         return text
     if tracker_instructions:
-        return (tracker_instructions.get(task_id) or "").strip()
+        text = (tracker_instructions.get(task_id) or "").strip()
+        if text:
+            return text
+    if corpus_instructions:
+        return (corpus_instructions.get(task_id) or "").strip()
     return ""
+
+
+def enrich_similarity_match_texts(
+    matches: list[SimilarityMatch],
+    instructions: dict[str, str],
+    tracker_instructions: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Ensure every match has full tracker text for UI and HTML export."""
+    merged = dict(tracker_instructions or {})
+    for match in matches:
+        task_id = match.task_id
+        text = _resolve_match_instruction_text(
+            task_id,
+            match.matched_instruction,
+            merged,
+            instructions,
+        )
+        if text and not (match.matched_instruction or "").strip():
+            match.matched_instruction = text
+        if text:
+            merged[task_id] = text
+        elif task_id not in merged:
+            merged[task_id] = ""
+    return merged
 
 
 def _html_instruction_comparison_section(
@@ -1136,15 +1165,17 @@ def check_instruction_similarity(
     else:
         pass_message = "No similarity matches returned."
 
+    tracker_instructions = enrich_similarity_match_texts(
+        matches,
+        instructions,
+    )
+
     return {
         "blocked": blocked,
         "message": pass_message,
         "matches": matches,
         "query_instruction": instruction_text,
-        "tracker_instructions": {
-            m.task_id: (m.matched_instruction or instructions.get(m.task_id, ""))
-            for m in matches
-        },
+        "tracker_instructions": tracker_instructions,
         "notes": notes,
         "change_task": blocked,
         "corpus_count": len(instructions),
@@ -1317,6 +1348,7 @@ def run_similarity_checks(
         api_key=api_key,
         tracker_cache=tracker_cache,
     )
+    enrich_similarity_match_texts(inst_matches, instructions_corpus)
     notes.extend(inst_notes)
 
     spec_matches: list[SimilarityMatch] = []

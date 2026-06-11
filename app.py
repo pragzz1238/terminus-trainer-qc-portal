@@ -66,6 +66,62 @@ def _text_size_bytes(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
+def _instruction_review_tracker_maps(
+    pre_result: dict,
+    *,
+    sheet_url: str = "",
+    worksheet: str = "",
+    task_col: str = "",
+    instruction_col: str = "",
+    trainer_col: str = "",
+    instruction_col_index: int = 16,
+    corpus_json_path: str = "",
+) -> dict[str, str]:
+    """Tracker instruction text for side-by-side review, with live corpus fallback."""
+    qe = _qc_engine()
+    tracker = dict(
+        pre_result.get("tracker_instructions")
+        or st.session_state.get("tracker_instruction_cache")
+        or {}
+    )
+    matches = pre_result.get("matches") or []
+    missing_ids = [
+        m.task_id
+        for m in matches
+        if not (
+            (getattr(m, "matched_instruction", "") or "").strip()
+            or (tracker.get(m.task_id) or "").strip()
+        )
+    ]
+    if not missing_ids:
+        return tracker
+
+    try:
+        instructions, _, _, _ = qe.fetch_similarity_corpus(
+            sheet_url=sheet_url,
+            worksheet=worksheet,
+            task_col=task_col,
+            instruction_col=instruction_col,
+            trainer_col=trainer_col,
+            instruction_col_index=instruction_col_index,
+            corpus_json_path=corpus_json_path,
+        )
+    except Exception:
+        return tracker
+
+    for match in matches:
+        task_id = match.task_id
+        if (tracker.get(task_id) or "").strip():
+            continue
+        text = (instructions.get(task_id) or "").strip()
+        if not text:
+            continue
+        tracker[task_id] = text
+        if not (getattr(match, "matched_instruction", "") or "").strip():
+            match.matched_instruction = text
+    return tracker
+
+
 @st.cache_resource(show_spinner=False)
 def _qc_engine():
     import qc_engine
@@ -264,12 +320,23 @@ with tab_instruction:
                     st.success(pre_result.get("message", "Instruction check passed."))
 
                 if pre_result.get("matches"):
+                    tracker_maps = _instruction_review_tracker_maps(
+                        pre_result,
+                        sheet_url=sheet_url,
+                        worksheet=worksheet,
+                        task_col=task_col,
+                        instruction_col=instruction_col,
+                        trainer_col=trainer_col,
+                        instruction_col_index=instruction_col_index,
+                        corpus_json_path=corpus_path if not sheet_url.strip() else "",
+                    )
+                    st.session_state.tracker_instruction_cache = tracker_maps
                     render_similarity_match_table(pre_result["matches"])
                     render_similarity_instruction_reviews(
                         instruction_text,
                         pre_result["matches"],
                         key_prefix="pre_inst",
-                        tracker_instructions=pre_result.get("tracker_instructions"),
+                        tracker_instructions=tracker_maps,
                     )
 
                 pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
@@ -293,17 +360,24 @@ with tab_instruction:
         status = "blocked" if blocked else "passed"
         st.caption(f"Last instruction check: **{status}** — run again to refresh or download reports.")
         if pre_result.get("matches"):
-            with st.expander("Previous match table", expanded=False):
-                render_similarity_match_table(pre_result["matches"])
-                render_similarity_instruction_reviews(
-                    st.session_state.instruction_pre_text,
-                    pre_result["matches"],
-                    key_prefix="pre_persist",
-                    tracker_instructions=(
-                        pre_result.get("tracker_instructions")
-                        or st.session_state.get("tracker_instruction_cache")
-                    ),
-                )
+            tracker_maps = _instruction_review_tracker_maps(
+                pre_result,
+                sheet_url=sheet_url,
+                worksheet=worksheet,
+                task_col=task_col,
+                instruction_col=instruction_col,
+                trainer_col=trainer_col,
+                instruction_col_index=instruction_col_index,
+                corpus_json_path=corpus_path if not sheet_url.strip() else "",
+            )
+            st.session_state.tracker_instruction_cache = tracker_maps
+            render_similarity_match_table(pre_result["matches"])
+            render_similarity_instruction_reviews(
+                st.session_state.instruction_pre_text,
+                pre_result["matches"],
+                key_prefix="pre_persist",
+                tracker_instructions=tracker_maps,
+            )
         if st.button("Prepare instruction report downloads", key="prep_pre_dl"):
             st.session_state.show_pre_downloads = True
         if st.session_state.get("show_pre_downloads"):
