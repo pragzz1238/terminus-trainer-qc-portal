@@ -23,6 +23,7 @@ from ui_components import (
     render_panel_header,
     render_footer,
     render_hero,
+    inject_page_favicon,
     render_metric_grid,
     render_topbar,
     render_verdict_banner,
@@ -67,10 +68,12 @@ def _qc_engine():
 
 st.set_page_config(
     page_title="Terminus QC · Task Checker",
-    page_icon=str(APP_DIR / "favicon.ico"),
+    page_icon="favicon.png",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+inject_page_favicon()
 
 inject_global_css()
 

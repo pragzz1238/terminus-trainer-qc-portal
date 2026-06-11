@@ -6,9 +6,12 @@ import base64
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).resolve().parent
-FAVICON_PATH = APP_DIR / "favicon.ico"
+FAVICON_PATH = APP_DIR / "favicon.png"
+if not FAVICON_PATH.is_file():
+    FAVICON_PATH = APP_DIR / "favicon.ico"
 APP_VERSION = "1.0"
 PRODUCT_NAME = "Terminus Edition-2"
 PRODUCT_TAGLINE = "Task Quality Checker"
@@ -228,7 +231,35 @@ def _favicon_data_uri() -> str:
     if not FAVICON_PATH.is_file():
         return ""
     encoded = base64.b64encode(FAVICON_PATH.read_bytes()).decode("ascii")
-    return f"data:image/x-icon;base64,{encoded}"
+    mime = "image/png" if FAVICON_PATH.suffix.lower() == ".png" else "image/x-icon"
+    return f"data:{mime};base64,{encoded}"
+
+
+def inject_page_favicon() -> None:
+    """Force browser tab icon — Streamlit only reliably serves PNG for page_icon."""
+    uri = _favicon_data_uri()
+    if not uri:
+        return
+    mime = "image/png" if FAVICON_PATH.suffix.lower() == ".png" else "image/x-icon"
+    # Markdown <link> lands in the body; inject into document.head for browser tabs.
+    components.html(
+        f"""
+<script>
+(function () {{
+  var doc = window.parent.document;
+  var href = {uri!r};
+  doc.querySelectorAll("link[rel*='icon']").forEach(function (el) {{ el.remove(); }});
+  var link = doc.createElement("link");
+  link.rel = "icon";
+  link.type = {mime!r};
+  link.href = href;
+  doc.head.appendChild(link);
+}})();
+</script>
+""",
+        height=0,
+        width=0,
+    )
 
 
 def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
