@@ -21,6 +21,9 @@ from alignment_prompts import (
     ALIGNMENT_CHECKS,
     ALIGNMENT_LABELS,
     ACCEPTED_TASK_NAMES,
+    LLM_CHECK_REQUIRES,
+    LLM_CHECKS_NEED_SPEC,
+    LLM_STRUCTURE_GUARD,
 )
 from config import (
     api_provider_label,
@@ -40,11 +43,17 @@ VALID_SUBCATS = {
     "ui_building",
 }
 LEAKAGE_PATTERN = re.compile(r"solve\.sh|solution/|/solution|/sol\b|oracle", re.IGNORECASE)
+TEST_IMPORTS_SOLUTION = re.compile(
+    r"\b(?:from|import)\s+solution\b|importlib\.import_module\s*\(\s*['\"]solution",
+    re.IGNORECASE,
+)
 PLACEHOLDER_PATTERN = re.compile(r"SET_AFTER|PLACEHOLDER|TODO_HASH|FIXME", re.IGNORECASE)
 LARGE_IMAGE_PATTERN = re.compile(
     r"^FROM\s+(gcc|golang|node|ruby|python(?!.*slim)):\S*-bookworm",
     re.MULTILINE | re.IGNORECASE,
 )
+GOLANG_BASE_PATTERN = re.compile(r"^FROM\s+golang:\S+", re.MULTILINE | re.IGNORECASE)
+GOLANG_BOOKWORM_PATTERN = re.compile(r"^FROM\s+golang:\S*-bookworm", re.MULTILINE | re.IGNORECASE)
 
 from tracker_defaults import (
     INSTRUCTION_SIM_THRESHOLD,
@@ -60,6 +69,15 @@ CHANGE_TASK_MESSAGE = (
     "Change the task — your instruction is too similar to an existing one "
     "(word overlap and meaning are both at or above 60%)."
 )
+
+TASK_REQUIRED_FILES: dict[str, str] = {
+    "task.toml": "Task metadata file",
+    "instruction.md": "Agent instructions",
+    "environment/Dockerfile": "Docker build file",
+    "solution/solve.sh": "Oracle solution",
+    "tests/test.sh": "Test runner",
+    "tests/test_outputs.py": "Test assertions",
+}
 
 
 @dataclass
@@ -88,6 +106,8 @@ class QCReport:
     timestamp: str
     overall_pass: bool
     static_pass: bool
+    structure_pass: bool
+    rubric_pass: bool
     similarity_pass: bool
     llm_pass: bool | None
     static_issues: list[Issue] = field(default_factory=list)
@@ -134,23 +154,94 @@ def detect_task_name(task_dir: Path, zip_name: str = "") -> str:
     return task_dir.name or "task"
 
 
+def _has_spec_md(task_dir: Path) -> bool:
+    return any(task_dir.rglob("SPEC.md"))
+
+
+def check_task_structure(task_dir: Path) -> tuple[list[Issue], list[str]]:
+    """Phase 1 — required submission layout (before content-level static/LLM checks)."""
+    issues: list[Issue] = []
+    missing: list[str] = []
+    task_dir = Path(task_dir)
+
+    for relpath, desc in TASK_REQUIRED_FILES.items():
+        if not (task_dir / relpath).is_file():
+            missing.append(relpath)
+            issues.append(
+                Issue(
+                    "CRITICAL",
+                    f"Missing {relpath} ({desc})",
+                    "Fix zip layout — files must be at archive root (not nested in a folder).",
+                )
+            )
+
+    if not missing:
+        if not _has_spec_md(task_dir):
+            issues.append(
+                Issue(
+                    "HIGH",
+                    "Missing SPEC.md under environment/",
+                    "Add environment/.../SPEC.md — required behavioral reference.",
+                )
+            )
+    return issues, missing
+
+
+def validate_rubric_text(rubric_text: str) -> list[Issue]:
+    """Validate rubrics.txt content (uploaded separately — not in submission zip)."""
+    issues: list[Issue] = []
+    text = (rubric_text or "").strip()
+    if not text:
+        issues.append(
+            Issue(
+                "MEDIUM",
+                "No rubrics uploaded",
+                "Paste or upload rubrics.txt — entered in the Snorkel platform textbox at submission.",
+            )
+        )
+        return issues
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        issues.append(Issue("HIGH", "rubrics.txt is empty"))
+        return issues
+
+    pos_sum = 0
+    neg_count = 0
+    for i, line in enumerate(lines, 1):
+        if not line.startswith("Agent"):
+            issues.append(Issue("HIGH", f"rubrics.txt line {i}: must start with 'Agent'"))
+        parts = line.rsplit(",", 1)
+        if len(parts) != 2:
+            issues.append(Issue("HIGH", f"rubrics.txt line {i}: missing ',+/-N' at end"))
+            continue
+        score_str = parts[1].strip()
+        if not re.match(r"^[+-]\d+$", score_str):
+            issues.append(Issue("HIGH", f"rubrics.txt line {i}: invalid score '{score_str}'"))
+            continue
+        score = int(score_str)
+        if abs(score) == 4:
+            issues.append(Issue("HIGH", f"rubrics.txt line {i}: ±4 is forbidden"))
+        if score > 0:
+            pos_sum += score
+        else:
+            neg_count += 1
+    if pos_sum < 10 or pos_sum > 40:
+        issues.append(Issue("HIGH", f"Rubric positive sum = {pos_sum} (must be 10-40)"))
+    if neg_count < 3:
+        issues.append(Issue("HIGH", f"Rubric has only {neg_count} negatives (need >=3)"))
+    return issues
+
+
 def run_static_checks(task_dir: Path) -> list[Issue]:
-    """Port of local-qc/run_qc.py checks."""
+    """Phase 2 — content checks (only on files that exist)."""
     issues: list[Issue] = []
     task_dir = Path(task_dir)
 
-    required = {
-        "task.toml": "Task metadata file",
-        "instruction.md": "Agent instructions",
-        "environment/Dockerfile": "Docker build file",
-        "solution/solve.sh": "Oracle solution",
-        "tests/test.sh": "Test runner",
-        "tests/test_outputs.py": "Test assertions",
-    }
-    for relpath, desc in required.items():
-        if not (task_dir / relpath).is_file():
-            issues.append(Issue("CRITICAL", f"Missing {relpath} ({desc})"))
-
+    structure_issues, missing = check_task_structure(task_dir)
+    issues.extend(structure_issues)
+    if missing:
+        return issues
     toml_path = task_dir / "task.toml"
     toml = toml_path.read_text() if toml_path.is_file() else ""
 
@@ -284,23 +375,43 @@ def run_static_checks(task_dir: Path) -> list[Issue]:
                 Issue("CRITICAL", "Dockerfile has COPY solution/ (solution must never be in image)")
             )
 
-        if LARGE_IMAGE_PATTERN.search(dockerfile):
+        if LARGE_IMAGE_PATTERN.search(dockerfile) or GOLANG_BOOKWORM_PATTERN.search(dockerfile):
             issues.append(
                 Issue(
-                    "HIGH",
-                    "Dockerfile uses a large bookworm base image (risk of 7200s build timeout)",
-                    "Use debian:bookworm-slim or python:*-slim and install tools explicitly",
+                    "CRITICAL",
+                    "Dockerfile uses a large bookworm base image (gcc/golang/ruby/node/python — "
+                    "risk of 7200s build timeout)",
+                    "Use debian:bookworm-slim@sha256:… and install compilers/Go tarball explicitly",
+                )
+            )
+        elif GOLANG_BASE_PATTERN.search(dockerfile) and not re.search(
+            r"^FROM\s+golang:\S*-alpine", dockerfile, re.MULTILINE | re.IGNORECASE
+        ):
+            issues.append(
+                Issue(
+                    "MEDIUM",
+                    "Dockerfile uses golang base image (prefer debian:bookworm-slim + Go tarball)",
+                    "Install Go from official tarball on debian:bookworm-slim (~80MB base)",
                 )
             )
 
-        if toml and "allow_internet = false" in toml and "pytest" not in dockerfile:
-            issues.append(
-                Issue(
-                    "HIGH",
-                    "allow_internet=false but pytest not installed in Dockerfile",
-                    "Bake pytest into the Dockerfile",
+        if toml and "allow_internet = false" in toml:
+            if "pytest" not in dockerfile:
+                issues.append(
+                    Issue(
+                        "HIGH",
+                        "allow_internet=false but pytest not installed in Dockerfile",
+                        "Bake pytest into the Dockerfile",
+                    )
                 )
-            )
+            if "pytest-json-ctrf" not in dockerfile and "json-ctrf" not in dockerfile:
+                issues.append(
+                    Issue(
+                        "MEDIUM",
+                        "allow_internet=false but pytest-json-ctrf not in Dockerfile",
+                        "Bake pytest-json-ctrf into the Dockerfile (test.sh needs ctrf.json)",
+                    )
+                )
 
     for check_file in ("instruction.md", "tests/test_outputs.py"):
         fpath = task_dir / check_file
@@ -318,7 +429,16 @@ def run_static_checks(task_dir: Path) -> list[Issue]:
 
     test_py = task_dir / "tests" / "test_outputs.py"
     if test_py.is_file():
-        placeholders = PLACEHOLDER_PATTERN.findall(test_py.read_text())
+        test_src = test_py.read_text()
+        if TEST_IMPORTS_SOLUTION.search(test_src):
+            issues.append(
+                Issue(
+                    "CRITICAL",
+                    "test_outputs.py imports or loads the solution package",
+                    "Re-derive expected values from the spec — never import solution/",
+                )
+            )
+        placeholders = PLACEHOLDER_PATTERN.findall(test_src)
         if placeholders:
             issues.append(
                 Issue(
@@ -373,35 +493,18 @@ def run_static_checks(task_dir: Path) -> list[Issue]:
                 )
             )
 
-    rubric_path = task_dir / "rubrics.txt"
-    if rubric_path.is_file():
-        lines = [line.strip() for line in rubric_path.read_text().splitlines() if line.strip()]
-        pos_sum = 0
-        neg_count = 0
-        for i, line in enumerate(lines, 1):
-            if not line.startswith("Agent"):
-                issues.append(Issue("HIGH", f"rubrics.txt line {i}: must start with 'Agent'"))
-            parts = line.rsplit(",", 1)
-            if len(parts) != 2:
-                issues.append(Issue("HIGH", f"rubrics.txt line {i}: missing ',+/-N' at end"))
-                continue
-            score_str = parts[1].strip()
-            if not re.match(r"^[+-]\d+$", score_str):
-                issues.append(Issue("HIGH", f"rubrics.txt line {i}: invalid score '{score_str}'"))
-                continue
-            score = int(score_str)
-            if abs(score) == 4:
-                issues.append(Issue("HIGH", f"rubrics.txt line {i}: ±4 is forbidden"))
-            if score > 0:
-                pos_sum += score
-            else:
-                neg_count += 1
-        if pos_sum < 10 or pos_sum > 40:
-            issues.append(Issue("HIGH", f"Rubric positive sum = {pos_sum} (must be 10-40)"))
-        if neg_count < 3:
-            issues.append(Issue("HIGH", f"Rubric has only {neg_count} negatives (need >=3)"))
-
     return issues
+
+
+def structure_pass(issues: list[Issue]) -> bool:
+    return not any(
+        issue.severity == "CRITICAL" and issue.message.startswith("Missing ")
+        for issue in issues
+    )
+
+
+def rubric_pass(issues: list[Issue]) -> bool:
+    return not any(issue.severity in {"CRITICAL", "HIGH"} for issue in issues)
 
 
 def _sheet_id_from_url(url: str) -> str:
@@ -1139,12 +1242,34 @@ def _build_alignment_prompt(
     closest_match: str,
 ) -> str:
     if key == "accepted_pattern":
-        return prompt_fn(
+        body = prompt_fn(
             **file_kwargs,
             accepted_digest=accepted_digest,
             closest_match=closest_match,
         )
-    return prompt_fn(**file_kwargs)
+    else:
+        body = prompt_fn(**file_kwargs)
+    return f"{LLM_STRUCTURE_GUARD}\n\n{body}"
+
+
+def _llm_check_applicable(task_dir: Path, check_key: str) -> bool:
+    required = LLM_CHECK_REQUIRES.get(check_key, [])
+    for relpath in required:
+        if not (task_dir / relpath).is_file():
+            return False
+    if check_key in LLM_CHECKS_NEED_SPEC and not _has_spec_md(task_dir):
+        return False
+    return True
+
+
+def _skipped_llm_result(label: str, reason: str) -> dict[str, Any]:
+    return {
+        "label": label,
+        "verdict": "SKIPPED",
+        "alignment_score": None,
+        "reasoning": reason,
+        "gaps": [],
+    }
 
 
 def _run_single_alignment_check(
@@ -1194,10 +1319,18 @@ def run_llm_judge(
     specs_corpus: dict[str, str] | None = None,
     model: str | None = None,
     on_progress: Any = None,
+    structure_ok: bool = True,
 ) -> tuple[dict[str, Any], bool | None, list[str]]:
     notes: list[str] = []
     if not api_key.strip():
         notes.append("LLM judge skipped — no API key provided")
+        return {}, None, notes
+
+    if not structure_ok:
+        notes.append(
+            "LLM alignment skipped — fix task folder structure first "
+            "(missing required files at zip root)."
+        )
         return {}, None, notes
 
     try:
@@ -1237,7 +1370,22 @@ def run_llm_judge(
     results: dict[str, Any] = {}
     reject_count = 0
     needs_work_count = 0
-    total_checks = len(ALIGNMENT_CHECKS)
+
+    checks_to_run: list[tuple[str, str, Any]] = []
+    for key, label, prompt_fn in ALIGNMENT_CHECKS:
+        if _llm_check_applicable(task_dir, key):
+            checks_to_run.append((key, label, prompt_fn))
+        else:
+            results[key] = _skipped_llm_result(
+                label,
+                "Skipped — required files not present (structure check flagged missing paths).",
+            )
+
+    total_checks = len(checks_to_run)
+    if not checks_to_run:
+        notes.append("LLM alignment skipped — no applicable checks (missing core files).")
+        return results, None, notes
+
     max_workers = resolve_llm_parallel_workers(total_checks)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -1253,7 +1401,7 @@ def run_llm_judge(
                 client,
                 llm_model,
             ): (key, label)
-            for key, label, prompt_fn in ALIGNMENT_CHECKS
+            for key, label, prompt_fn in checks_to_run
         }
         completed = 0
         for future in as_completed(futures):
@@ -1277,7 +1425,8 @@ def run_llm_judge(
 
     notes.append(
         f"LLM alignment judge completed via {provider} ({llm_model}): "
-        f"{len(ALIGNMENT_CHECKS)} checks in parallel (max {max_workers} workers), "
+        f"{len(checks_to_run)} checks run ({len(ALIGNMENT_CHECKS) - len(checks_to_run)} skipped), "
+        f"parallel max {max_workers} workers, "
         f"{reject_count} rejects, {needs_work_count} needs-work"
     )
     llm_pass = reject_count == 0 and needs_work_count == 0
@@ -1298,9 +1447,15 @@ def overall_pass(
     sim_ok: bool,
     llm_ok: bool | None,
     instruction_blocked: bool = False,
+    structure_ok: bool = True,
+    rubric_ok: bool = True,
 ) -> bool:
-    """LLM alignment is primary; dual instruction block always fails."""
+    """LLM alignment is primary when structure is valid; dual instruction block always fails."""
     if instruction_blocked:
+        return False
+    if not structure_ok:
+        return False
+    if not rubric_ok:
         return False
     if llm_ok is False:
         return False
@@ -1315,6 +1470,7 @@ def assess_task(
     zip_bytes: bytes,
     zip_name: str,
     trainer_name: str = "",
+    rubric_text: str = "",
     sheet_url: str = "",
     worksheet: str = "",
     task_col: str = "",
@@ -1375,28 +1531,43 @@ def assess_task(
     )
     notes.extend(corpus_notes)
 
-    # Instruction.md is checked FIRST — before static checks and LLM.
-    inst_matches, spec_matches, max_sim, instruction_blocked, block_message, sim_notes = (
-        run_similarity_checks(
-            task_dir,
-            instructions_corpus,
-            specs_corpus,
-            task_name,
-            corpus_meta=corpus_meta,
-            api_key=api_key,
-            tracker_cache=tracker_cache,
-        )
-    )
-    notes.extend(sim_notes)
-    if instruction_blocked:
-        notes.insert(0, f"[INSTRUCTION CHECK] {block_message}")
-
+    # Phase 1 — folder structure + static content checks (before LLM).
     static_issues = run_static_checks(task_dir)
+    rubric_issues = validate_rubric_text(rubric_text)
+    struct_ok = structure_pass(static_issues)
+    rubric_ok = rubric_pass(rubric_issues)
+    if not struct_ok:
+        notes.insert(0, "[STRUCTURE] Fix missing required files at zip root before LLM review.")
+
+    inst_matches: list[SimilarityMatch] = []
+    spec_matches: list[SimilarityMatch] = []
+    max_sim = 0.0
+    instruction_blocked = False
+    block_message = ""
+
+    if (task_dir / "instruction.md").is_file():
+        inst_matches, spec_matches, max_sim, instruction_blocked, block_message, sim_notes = (
+            run_similarity_checks(
+                task_dir,
+                instructions_corpus,
+                specs_corpus,
+                task_name,
+                corpus_meta=corpus_meta,
+                api_key=api_key,
+                tracker_cache=tracker_cache,
+            )
+        )
+        notes.extend(sim_notes)
+        if instruction_blocked:
+            notes.insert(0, f"[INSTRUCTION CHECK] {block_message}")
+    else:
+        notes.append("Instruction similarity skipped — instruction.md missing from zip.")
 
     llm_results: dict[str, Any] = {}
     llm_ok: bool | None = None
     if run_llm:
-        accepted_dir = Path(__file__).resolve().parent.parent / "My_Accepted_Tasks"
+        accepted_root = Path(__file__).resolve().parent.parent / "My_Accepted_Tasks"
+        accepted_dir = accepted_root if accepted_root.is_dir() else Path(__file__).resolve().parent
         llm_results, llm_ok, llm_notes = run_llm_judge(
             task_dir,
             api_key,
@@ -1406,24 +1577,30 @@ def assess_task(
             instructions_corpus=instructions_corpus,
             specs_corpus=specs_corpus,
             on_progress=on_llm_progress,
+            structure_ok=struct_ok,
         )
         notes.extend(llm_notes)
 
     sim_ok = similarity_pass(inst_matches)
+    all_issues = static_issues + rubric_issues
     report = QCReport(
         task_name=task_name,
         trainer_name=trainer_name.strip(),
         timestamp=datetime.now(timezone.utc).isoformat(),
         overall_pass=overall_pass(
-            static_pass(static_issues),
+            static_pass(all_issues),
             sim_ok,
             llm_ok,
             instruction_blocked=instruction_blocked,
+            structure_ok=struct_ok,
+            rubric_ok=rubric_ok,
         ),
-        static_pass=static_pass(static_issues),
+        static_pass=static_pass(all_issues),
+        structure_pass=struct_ok,
+        rubric_pass=rubric_ok,
         similarity_pass=sim_ok and not instruction_blocked,
         llm_pass=llm_ok,
-        static_issues=static_issues,
+        static_issues=all_issues,
         instruction_matches=inst_matches,
         spec_matches=spec_matches,
         max_similarity=max_sim,
@@ -1441,6 +1618,8 @@ def report_to_dict(report: QCReport) -> dict[str, Any]:
         "trainer_name": report.trainer_name,
         "timestamp": report.timestamp,
         "overall_pass": report.overall_pass,
+        "structure_pass": report.structure_pass,
+        "rubric_pass": report.rubric_pass,
         "static_checks": {
             "pass": report.static_pass,
             "issues": [asdict(issue) for issue in report.static_issues],

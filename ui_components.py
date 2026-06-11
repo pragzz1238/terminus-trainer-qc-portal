@@ -132,7 +132,7 @@ def inject_global_css() -> None:
     }
 
     .t-metrics {
-        display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;
         margin: 1rem 0 1.1rem 0;
     }
     @media (max-width: 900px) { .t-metrics { grid-template-columns: repeat(2, 1fr); } }
@@ -246,8 +246,9 @@ def render_hero() -> None:
         """
 <div class="t-hero">
   <h2>Pre-submission quality gate for trainer tasks</h2>
-  <p>Validate <strong>instruction.md</strong> against the team tracker, then run a full zip assessment:
-  static checks, similarity analysis, and LLM alignment against <strong>8 accepted reference tasks</strong>.</p>
+  <p>Run <strong>instruction similarity</strong> or <strong>full task QC</strong> independently.
+  Full assessment checks folder structure first, then static rules, similarity, and LLM alignment
+  against <strong>8 accepted reference tasks</strong>.</p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -358,6 +359,8 @@ def llm_verdict_label(verdict: str) -> str:
         "PASS": ("#ecfdf5", "#047857", "#6ee7b7"),
         "NEEDS_WORK": ("#fffbeb", "#b45309", "#fde68a"),
         "FAIL": ("#fef2f2", "#b91c1c", "#fca5a5"),
+        "REJECT": ("#fef2f2", "#b91c1c", "#fca5a5"),
+        "SKIPPED": ("#f1f5f9", "#475569", "#cbd5e1"),
     }
     bg, fg, border = styles.get(verdict, ("#f8fafc", "#475569", "#e2e8f0"))
     return (

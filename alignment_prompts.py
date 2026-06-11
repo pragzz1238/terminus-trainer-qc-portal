@@ -142,6 +142,21 @@ Your job is to compare a SUBMITTED task and find
 every specific issue. Be precise: cite exact file names, line content, field names,
 and what is wrong. Do not give vague feedback. Every gap you list must be actionable."""
 
+LLM_STRUCTURE_GUARD = """
+IMPORTANT REVIEW RULES:
+- If any file block shows "[FILE NOT FOUND]" or "[NO SPEC.MD FOUND]", do NOT fail alignment
+  for missing content in that file — static structure checks already flagged it.
+- Evaluate ONLY files that are present. Never REJECT solely because a file is absent.
+- tests/test.sh is NOT included in this review bundle — never flag missing test.sh here.
+- Static checks already grep instruction.md and test_outputs.py for solve.sh/solution/oracle
+  strings and flag Dockerfile COPY tests/ or COPY solution/ — do not REJECT for those
+  if static checks would already catch them unless you see a genuine miss.
+- Use NEEDS_WORK (not REJECT) for polish issues on otherwise sound accepted-style tasks.
+- Flag language mismatch only when task.toml/instruction explicitly require a compiled
+  language (C, Go, Rust) and solve.sh clearly ignores that requirement.
+- Python/bash heredoc solutions are acceptable when the task does not require compilation.
+"""
+
 
 # ─── PROMPT 1: Accepted Pattern Alignment ───────────────────────────────
 
@@ -456,6 +471,8 @@ CHECK EACH OF THESE:
    - If instruction says nothing about language: Python heredoc is acceptable.
 5. Is the solution deterministic (no randomness, no timestamps, no network calls)?
 6. Does solve.sh match the accepted patterns shown above?
+7. Language rule: REJECT language mismatch ONLY if instruction.md AND task.toml explicitly
+   require C/Go/Rust compilation and solve.sh uses none of those. Otherwise NEEDS_WORK at most.
 
 SUBMITTED TASK:
 {_files_block(instruction, spec_md, test_py, solve_sh, dockerfile, task_toml)}
@@ -508,9 +525,11 @@ CHECK EACH OF THESE:
    - Does the solution code show evidence of multiple phases?
    - Or is it a single pass that would miss re-evaluation?
 5. task.toml says languages=[...] — does solve.sh use that language?
-   - languages=["c","bash"] → solve.sh must compile and run a .c file
-   - languages=["go","bash"] → solve.sh must compile and run a .go file
-   - If solve.sh uses Python but task.toml says C/Go → flag mismatch
+   - languages=["c","bash"] → solve.sh should compile and run a .c file
+   - languages=["go","bash"] → solve.sh should compile and run a .go file
+   - If languages are bash-only or instruction does not mandate compilation, do not REJECT
+     for helper scripts / heredocs.
+   - REJECT hardcoded_solution only for obvious stubs (empty main, pre-printed JSON).
 
 SUBMITTED TASK:
 {_files_block(instruction, spec_md, test_py, solve_sh, dockerfile, task_toml)}
@@ -563,10 +582,10 @@ CHECK EACH OF THESE:
    - test_no_interpreter_solver_scripts: searches /app, /tmp, /root for .py, .sh, .rb, etc.
 4. Would any test pass with EMPTY output (empty JSON {{}} or [])?
    - Check: are there tests that assert len(report["key"]) > 0?
-5. Does test.sh properly write reward.txt via EXIT trap?
-6. Do the hash values in EXPECTED_FIELD_HASHES match what solve.sh would actually produce?
+5. Do the hash values in EXPECTED_FIELD_HASHES match what solve.sh would actually produce?
    (This is hard to verify without running, but check for obvious mismatches like
    hash dict referencing keys that solve.sh doesn't generate.)
+6. Skip test.sh / reward.txt checks — test.sh is not in this review bundle.
 
 SUBMITTED TASK:
 {_files_block(instruction, spec_md, test_py, solve_sh, dockerfile, task_toml)}
@@ -675,3 +694,17 @@ ALIGNMENT_CHECKS: list[tuple[str, str, Any]] = [
 ]
 
 ALIGNMENT_LABELS = {key: label for key, label, _ in ALIGNMENT_CHECKS}
+
+# Minimum on-disk files before an LLM alignment check runs.
+LLM_CHECK_REQUIRES: dict[str, list[str]] = {
+    "instruction_vs_all_refs": ["instruction.md"],
+    "accepted_pattern": ["instruction.md"],
+    "instruction_spec": ["instruction.md"],
+    "instruction_test": ["instruction.md", "tests/test_outputs.py"],
+    "spec_test": ["tests/test_outputs.py"],
+    "solution_instruction": ["solution/solve.sh", "instruction.md"],
+    "solution_spec": ["solution/solve.sh"],
+    "solution_test": ["solution/solve.sh", "tests/test_outputs.py"],
+    "environment": ["environment/Dockerfile", "task.toml"],
+}
+LLM_CHECKS_NEED_SPEC = {"instruction_spec", "spec_test"}
