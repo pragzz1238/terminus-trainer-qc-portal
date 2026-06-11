@@ -56,6 +56,7 @@ GOLANG_BASE_PATTERN = re.compile(r"^FROM\s+golang:\S+", re.MULTILINE | re.IGNORE
 GOLANG_BOOKWORM_PATTERN = re.compile(r"^FROM\s+golang:\S*-bookworm", re.MULTILINE | re.IGNORECASE)
 
 from tracker_defaults import (
+    INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
     INSTRUCTION_SIM_THRESHOLD,
     INSTRUCTION_SIM_BLOCK,
     INSTRUCTION_SIM_WARN,
@@ -64,10 +65,12 @@ from tracker_defaults import (
 )
 SIM_THRESHOLD_WARN = INSTRUCTION_SIM_WARN
 SIM_THRESHOLD_BLOCK = INSTRUCTION_SIM_BLOCK
+SEMANTIC_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
+DUAL_BLOCK_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
 BUNDLED_CORPUS_PATH = Path(__file__).resolve().parent / "terminus_task_corpus.json"
 CHANGE_TASK_MESSAGE = (
     "Change the task — your instruction is too similar to an existing one "
-    "(word overlap and meaning are both at or above 60%)."
+    f"(word overlap and meaning both ≥ {DUAL_BLOCK_PCT}%, or meaning ≥ {SEMANTIC_BLOCK_PCT}%)."
 )
 
 TASK_REQUIRED_FILES: dict[str, str] = {
@@ -97,6 +100,18 @@ class SimilarityMatch:
     lexical_score: float | None = None
     semantic_score: float | None = None
     dual_block: bool = False
+    block_reason: str = ""
+    matched_instruction: str = ""
+
+
+def similarity_flag_label(match: SimilarityMatch) -> str:
+    if not match.dual_block:
+        return "No"
+    if match.block_reason == "meaning":
+        return f"YES (meaning ≥{SEMANTIC_BLOCK_PCT}%)"
+    if match.block_reason == "dual":
+        return f"YES (both ≥{DUAL_BLOCK_PCT}%)"
+    return "YES"
 
 
 @dataclass
@@ -116,6 +131,7 @@ class QCReport:
     max_similarity: float = 0.0
     instruction_blocked: bool = False
     instruction_block_message: str = ""
+    submitted_instruction: str = ""
     llm_results: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -821,7 +837,7 @@ def run_instruction_similarity(
     api_key: str = "",
     tracker_cache: dict[str, Any] | None = None,
 ) -> tuple[list[SimilarityMatch], bool, str, list[str], dict[str, Any]]:
-    """Parallel lexical + embedding check. Block only when both >= 60%."""
+    """Parallel lexical + embedding check. Block when dual ≥60% or meaning ≥70%."""
     from similarity_engine import compare_instruction_to_corpus_full
 
     notes: list[str] = []
@@ -890,6 +906,8 @@ def run_instruction_similarity(
             lexical_score=h.lexical_score,
             semantic_score=h.semantic_score,
             dual_block=h.dual_block,
+            block_reason=h.block_reason,
+            matched_instruction=h.matched_instruction,
         )
         for h in hits
     ]
@@ -898,11 +916,17 @@ def run_instruction_similarity(
     block_message = ""
     if blocked:
         top = next(m for m in inst_matches if m.dual_block)
+        reason_note = (
+            f"meaning ≥ {SEMANTIC_BLOCK_PCT}%"
+            if top.block_reason == "meaning"
+            else f"both word overlap and meaning ≥ {DUAL_BLOCK_PCT}%"
+        )
         block_message = (
             f"{CHANGE_TASK_MESSAGE} Closest match: {top.task_id}"
             f" (trainer: {top.trainer or 'unknown'}) — "
             f"word overlap {round(top.lexical_score * 100)}%, "
-            f"meaning {round((top.semantic_score or 0) * 100)}%."
+            f"meaning {round((top.semantic_score or 0) * 100)}% "
+            f"({reason_note}). Use 👁 review below to compare instructions."
         )
         notes.append(block_message)
     elif hits and sim_meta.embedding_ran:
@@ -910,7 +934,7 @@ def run_instruction_similarity(
         notes.append(
             f"Top match — word overlap {round(top.lexical_score * 100)}%, "
             f"meaning {round((top.semantic_score or 0) * 100)}% "
-            f"(blocked only when both ≥ 60%)"
+            f"(flagged when both ≥ {DUAL_BLOCK_PCT}% or meaning ≥ {SEMANTIC_BLOCK_PCT}%)"
         )
     elif hits:
         top = hits[0]
@@ -975,7 +999,7 @@ def check_instruction_similarity(
             f"Looks good — closest match has word overlap "
             f"{round((top.lexical_score or 0) * 100)}% and meaning "
             f"{round((top.semantic_score or 0) * 100)}% "
-            f"(blocked only when both reach 60%)."
+            f"(flagged when both ≥ {DUAL_BLOCK_PCT}% or meaning ≥ {SEMANTIC_BLOCK_PCT}%)."
         )
     elif run_meta.get("embedding_ran"):
         pass_message = (
@@ -1022,6 +1046,7 @@ def instruction_precheck_to_dict(
         "trainer_name": trainer_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "instruction_preview": instruction_text[:500],
+        "instruction_full": instruction_text,
         "instruction_length": len(instruction_text),
         "blocked": result.get("blocked", False),
         "change_task": result.get("change_task", False),
@@ -1032,7 +1057,8 @@ def instruction_precheck_to_dict(
         "embedding_error": result.get("embedding_error"),
         "api_key_present": result.get("api_key_present", False),
         "api_provider": result.get("api_provider", ""),
-        "dual_threshold_percent": int(INSTRUCTION_SIM_THRESHOLD * 100),
+        "dual_threshold_percent": DUAL_BLOCK_PCT,
+        "semantic_block_threshold_percent": SEMANTIC_BLOCK_PCT,
         "matches": [
             {
                 "task": m.task_id,
@@ -1043,7 +1069,10 @@ def instruction_precheck_to_dict(
                     if m.semantic_score is not None else None
                 ),
                 "dual_block": m.dual_block,
+                "block_reason": m.block_reason,
+                "flag_label": similarity_flag_label(m),
                 "method": m.method,
+                "matched_instruction": m.matched_instruction,
             }
             for m in matches
         ],
@@ -1059,22 +1088,36 @@ def render_instruction_precheck_html(
     import html as html_module
 
     data = instruction_precheck_to_dict(result, instruction_text, trainer_name)
-    safe_instruction = html_module.escape(instruction_text[:3000])
+    safe_instruction = html_module.escape(instruction_text)
     blocked = data["blocked"]
     color = "#e74c3c" if blocked else "#2ecc71"
     status = "CHANGE TASK" if blocked else "OK TO PROCEED"
     rows = ""
+    review_sections = ""
     for m in data["matches"]:
         emb = m["embedding_percent"]
         emb_s = f"{emb}%" if emb is not None else "—"
-        flag = "YES" if m["dual_block"] else "No"
+        flag = m.get("flag_label") or ("YES" if m["dual_block"] else "No")
         rows += (
             f"<tr><td>{m['task']}</td><td>{m['trainer'] or '—'}</td>"
             f"<td>{m['lexical_percent']}%</td><td>{emb_s}</td>"
-            f"<td>{flag}</td><td>{m['method']}</td></tr>"
+            f"<td>{flag}</td><td>{m['method']}</td>"
+            f"<td><a href=\"#review-{html_module.escape(m['task'])}\" title=\"Review\">👁</a></td></tr>"
         )
+        safe_match = html_module.escape(m.get("matched_instruction") or "")
+        review_sections += f"""
+  <details id="review-{html_module.escape(m['task'])}" class="review-block" {"open" if m['dual_block'] else ""}>
+    <summary>👁 Compare with <strong>{html_module.escape(m['task'])}</strong>
+      — word {m['lexical_percent']}%, meaning {emb_s} · {flag}</summary>
+    <div class="compare-grid">
+      <div><h3>Your instruction</h3><pre>{safe_instruction}</pre></div>
+      <div><h3>Tracker match ({html_module.escape(m['trainer'] or 'unknown')})</h3><pre>{safe_match}</pre></div>
+    </div>
+  </details>"""
     if not rows:
-        rows = "<tr><td colspan='6'>No matches returned.</td></tr>"
+        rows = "<tr><td colspan='7'>No matches returned.</td></tr>"
+    if not review_sections:
+        review_sections = "<p><em>No tracker matches to compare.</em></p>"
 
     embed_status = "Ran" if data["embedding_ran"] else "Did not run"
     if data["embedding_error"]:
@@ -1092,7 +1135,11 @@ def render_instruction_precheck_html(
     table {{ border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }}
     th, td {{ border: 1px solid #ddd; padding: 8px; vertical-align: top; }}
     th {{ background: #f7f7f7; text-align: left; }}
-    pre {{ background: #f6f8fa; padding: 12px; border-radius: 8px; white-space: pre-wrap; }}
+    pre {{ background: #f6f8fa; padding: 12px; border-radius: 8px; white-space: pre-wrap; font-size: 13px; line-height: 1.45; }}
+    .review-block {{ border: 1px solid #dde3ea; border-radius: 10px; padding: 10px 14px; margin: 12px 0; }}
+    .review-block summary {{ cursor: pointer; font-weight: 600; }}
+    .compare-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }}
+    @media (max-width: 900px) {{ .compare-grid {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
@@ -1103,15 +1150,16 @@ def render_instruction_precheck_html(
     <p>{data["message"]}</p>
     <p><strong>Corpus:</strong> {data["corpus_count"]} instructions ·
        <strong>Embedding:</strong> {embed_status} ({data["embed_model"]}) ·
-       <strong>Dual block threshold:</strong> both ≥ {data["dual_threshold_percent"]}%</p>
+       <strong>Flag rules:</strong> both ≥ {data["dual_threshold_percent"]}% OR meaning ≥ {data["semantic_block_threshold_percent"]}%</p>
   </div>
   <h2>Top matches (tracker sheet)</h2>
   <table>
-    <tr><th>Task</th><th>Trainer</th><th>Lexical</th><th>Embedding</th><th>Change task?</th><th>Method</th></tr>
+    <tr><th>Task</th><th>Trainer</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Method</th><th>👁</th></tr>
     {rows}
   </table>
-  <h2>Your instruction (preview)</h2>
-  <pre>{safe_instruction}</pre>
+  <h2>👁 Instruction comparison</h2>
+  <p>Open each row below to read your instruction next to the tracker match and decide if the task is truly too similar.</p>
+  {review_sections}
   <h2>Diagnostics</h2>
   <ul>{notes_html}</ul>
   <p><em>Note: An accepted reference task can still show high similarity to itself or peers in the tracker — review the match list before changing the task.</em></p>
@@ -1583,6 +1631,8 @@ def assess_task(
 
     sim_ok = similarity_pass(inst_matches)
     all_issues = static_issues + rubric_issues
+    inst_path = task_dir / "instruction.md"
+    submitted_instruction = inst_path.read_text().strip() if inst_path.is_file() else ""
     report = QCReport(
         task_name=task_name,
         trainer_name=trainer_name.strip(),
@@ -1606,6 +1656,7 @@ def assess_task(
         max_similarity=max_sim,
         instruction_blocked=instruction_blocked,
         instruction_block_message=block_message,
+        submitted_instruction=submitted_instruction,
         llm_results=llm_results,
         notes=notes,
     )
@@ -1628,7 +1679,9 @@ def report_to_dict(report: QCReport) -> dict[str, Any]:
             "pass": report.similarity_pass,
             "instruction_blocked": report.instruction_blocked,
             "instruction_block_message": report.instruction_block_message,
-            "dual_threshold_percent": int(INSTRUCTION_SIM_THRESHOLD * 100),
+            "dual_threshold_percent": DUAL_BLOCK_PCT,
+            "semantic_block_threshold_percent": SEMANTIC_BLOCK_PCT,
+            "submitted_instruction": report.submitted_instruction,
             "max_score_percent": round(report.max_similarity * 100, 1),
             "threshold_warn_percent": int(SIM_THRESHOLD_WARN * 100),
             "threshold_block_percent": int(SIM_THRESHOLD_BLOCK * 100),
@@ -1640,8 +1693,11 @@ def report_to_dict(report: QCReport) -> dict[str, Any]:
                     "lexical_percent": round(match.lexical_score * 100, 1) if match.lexical_score else None,
                     "semantic_percent": round(match.semantic_score * 100, 1) if match.semantic_score else None,
                     "dual_block": match.dual_block,
+                    "block_reason": match.block_reason,
+                    "flag_label": similarity_flag_label(match),
                     "method": match.method,
                     "source": match.source,
+                    "matched_instruction": match.matched_instruction,
                 }
                 for match in report.instruction_matches
             ],
@@ -1688,9 +1744,11 @@ def render_html_report(report: QCReport) -> str:
     if not issue_rows:
         issue_rows = "<tr><td colspan='3'>No static issues found.</td></tr>"
 
+    import html as html_module
+
     def sim_rows(matches: list[SimilarityMatch]) -> str:
         if not matches:
-            return "<tr><td colspan='5'>No matches.</td></tr>"
+            return "<tr><td colspan='6'>No matches.</td></tr>"
         rows = ""
         for match in matches:
             lex = round((match.lexical_score or 0) * 100, 1)
@@ -1698,12 +1756,36 @@ def render_html_report(report: QCReport) -> str:
                 round(match.semantic_score * 100, 1)
                 if match.semantic_score is not None else "—"
             )
-            status = "CHANGE TASK" if match.dual_block else "OK"
+            status = similarity_flag_label(match)
             rows += (
-                f"<tr><td>{match.task_id}</td><td>{lex}%</td><td>{sem}%</td>"
-                f"<td>{status}</td><td>{match.trainer or '—'}</td></tr>"
+                f"<tr><td>{html_module.escape(match.task_id)}</td>"
+                f"<td>{lex}%</td><td>{sem}%</td><td>{status}</td>"
+                f"<td>{html_module.escape(match.trainer or '—')}</td>"
+                f"<td><a href=\"#review-{html_module.escape(match.task_id)}\">👁</a></td></tr>"
             )
         return rows
+
+    inst_review_html = ""
+    safe_yours = html_module.escape(report.submitted_instruction)
+    for match in report.instruction_matches:
+        emb = (
+            round(match.semantic_score * 100, 1)
+            if match.semantic_score is not None else "—"
+        )
+        lex = round((match.lexical_score or 0) * 100, 1)
+        flag = similarity_flag_label(match)
+        safe_match = html_module.escape(match.matched_instruction)
+        inst_review_html += f"""
+  <details id="review-{html_module.escape(match.task_id)}" {"open" if match.dual_block else ""}>
+    <summary>👁 Compare with <strong>{html_module.escape(match.task_id)}</strong>
+      — word {lex}%, meaning {emb}% · {flag}</summary>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+      <div><h3>Your instruction.md</h3><pre style="white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px">{safe_yours}</pre></div>
+      <div><h3>Tracker ({html_module.escape(match.trainer or 'unknown')})</h3><pre style="white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px">{safe_match}</pre></div>
+    </div>
+  </details>"""
+    if not inst_review_html:
+        inst_review_html = "<p><em>No instruction matches.</em></p>"
 
     llm_sections = ""
     if report.llm_results:
@@ -1785,12 +1867,14 @@ def render_html_report(report: QCReport) -> str:
     {issue_rows}
   </table>
 
-  <h2>Instruction Similarity (dual block: lexical &amp; embedding both &ge; 60%)</h2>
+  <h2>Instruction Similarity (both ≥ {DUAL_BLOCK_PCT}% OR meaning ≥ {SEMANTIC_BLOCK_PCT}%)</h2>
   {f'<p style="color:#e74c3c;font-weight:700">{report.instruction_block_message}</p>' if report.instruction_blocked else ''}
   <table>
-    <tr><th>Task</th><th>Lexical</th><th>Embedding</th><th>Status</th><th>Trainer</th></tr>
+    <tr><th>Task</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Trainer</th><th>👁</th></tr>
     {sim_rows(report.instruction_matches)}
   </table>
+  <h3>👁 Instruction comparison</h3>
+  {inst_review_html}
 
   <h2>SPEC Similarity</h2>
   <table>

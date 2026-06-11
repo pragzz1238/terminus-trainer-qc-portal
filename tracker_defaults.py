@@ -23,10 +23,12 @@ TRACKER_COL_TASK_INSTRUCTION = 16  # P — "Task Instruction"
 
 TASK_INSTRUCTION_HEADER = "Task Instruction"
 
-# Dual-block threshold: BOTH lexical AND embedding must be >= 60% to flag duplicate.
+# Dual-block: BOTH lexical AND embedding >= 60% flags duplicate.
 INSTRUCTION_SIM_THRESHOLD = 0.60
 INSTRUCTION_LEXICAL_GATE = INSTRUCTION_SIM_THRESHOLD
 INSTRUCTION_SEMANTIC_THRESHOLD = INSTRUCTION_SIM_THRESHOLD
+# Meaning-only block: semantic >= 70% flags even when word overlap is lower.
+INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD = 0.70
 INSTRUCTION_SIM_WARN = INSTRUCTION_SIM_THRESHOLD
 INSTRUCTION_SIM_BLOCK = INSTRUCTION_SIM_THRESHOLD
 

@@ -1,7 +1,8 @@
 """Instruction similarity — lexical + embedding run in parallel.
 
-Block rule: BOTH lexical AND embedding scores must be >= 60% on the same
-corpus row before the portal says to change the task.
+Block rules (same tracker row):
+- BOTH word overlap and meaning >= 60%, OR
+- meaning alone >= 70%.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from tracker_defaults import (
     DEFAULT_EMBED_MODEL,
+    INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
     INSTRUCTION_SIM_THRESHOLD,
 )
 
@@ -27,7 +29,9 @@ class SimilarityHit:
     semantic_score: float | None
     method: str
     instruction_preview: str
+    matched_instruction: str = ""
     dual_block: bool = False
+    block_reason: str = ""
 
 
 @dataclass
@@ -69,15 +73,30 @@ def lexical_similarity(a: str, b: str) -> float:
     return (2 * intersect) / (len(x_set) + len(y_set))
 
 
+def evaluate_similarity_block(
+    lexical_score: float,
+    semantic_score: float | None,
+    dual_threshold: float = INSTRUCTION_SIM_THRESHOLD,
+    semantic_block_threshold: float = INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
+) -> tuple[bool, str]:
+    """Return (flagged, reason) where reason is '', 'dual', or 'meaning'."""
+    if semantic_score is None:
+        return False, ""
+    if lexical_score >= dual_threshold and semantic_score >= dual_threshold:
+        return True, "dual"
+    if semantic_score >= semantic_block_threshold:
+        return True, "meaning"
+    return False, ""
+
+
 def is_dual_duplicate(
     lexical_score: float,
     semantic_score: float | None,
     threshold: float = INSTRUCTION_SIM_THRESHOLD,
 ) -> bool:
-    """Both checks must clear the threshold to block."""
-    if semantic_score is None:
-        return False
-    return lexical_score >= threshold and semantic_score >= threshold
+    """Backward-compatible: True when evaluate_similarity_block would flag."""
+    flagged, _ = evaluate_similarity_block(lexical_score, semantic_score, threshold)
+    return flagged
 
 
 def embed_texts_batch(
@@ -205,7 +224,7 @@ def compare_instruction_to_corpus_full(
     """
     Run lexical and embedding similarity in parallel against the full corpus.
     Always returns top-N rows with both scores visible (even below threshold).
-    dual_block=True only when BOTH lexical and embedding >= threshold.
+    dual_block=True when dual >= 60% OR meaning >= 70%.
     """
     from config import resolve_embed_model, resolve_openai_api_key
 
@@ -239,7 +258,6 @@ def compare_instruction_to_corpus_full(
     embedding_error: str | None = None
     embedding_ran = False
 
-    # Run in main thread — avoids Streamlit secrets / API client issues in worker threads.
     lexical_scores = _compute_lexical_scores(query, candidates)
     if api_key:
         try:
@@ -257,13 +275,16 @@ def compare_instruction_to_corpus_full(
 
     hits: list[SimilarityHit] = []
     for key, meta in candidates:
+        inst_full = meta.get("instruction", "")
         lex = lexical_scores.get(key, 0.0)
         sem = semantic_scores.get(key)
-        dual = is_dual_duplicate(lex, sem, threshold)
-        if dual:
-            method = "lexical+semantic-dual"
+        flagged, reason = evaluate_similarity_block(lex, sem, threshold)
+        if reason == "dual":
+            method = "dual-60"
+        elif reason == "meaning":
+            method = "meaning-70"
         elif sem is not None and sem >= threshold:
-            method = "semantic-only"
+            method = "semantic-high"
         elif lex >= threshold:
             method = "lexical-only"
         else:
@@ -275,8 +296,10 @@ def compare_instruction_to_corpus_full(
                 lexical_score=lex,
                 semantic_score=sem,
                 method=method,
-                instruction_preview=meta.get("instruction", "")[:200],
-                dual_block=dual,
+                instruction_preview=inst_full[:200],
+                matched_instruction=inst_full,
+                dual_block=flagged,
+                block_reason=reason,
             )
         )
 

@@ -15,16 +15,21 @@ from config import (
     resolve_openai_api_key,
     resolve_sheet_defaults,
 )
-from tracker_defaults import INSTRUCTION_SIM_THRESHOLD
+from tracker_defaults import (
+    INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
+    INSTRUCTION_SIM_THRESHOLD,
+)
 from ui_components import (
     inject_global_css,
+    inject_page_favicon,
     llm_verdict_label,
     render_download_panel,
     render_panel_header,
     render_footer,
     render_hero,
-    inject_page_favicon,
     render_metric_grid,
+    render_similarity_instruction_reviews,
+    render_similarity_match_table,
     render_topbar,
     render_verdict_banner,
     render_section_header,
@@ -34,14 +39,16 @@ from ui_components import (
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CORPUS = APP_DIR / "terminus_task_corpus.json"
 SIM_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
+MEANING_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
 INSTRUCTION_CHECK_HELP = (
-    f"Compare your instruction against the team tracker. You'll be blocked only if "
-    f"it's too similar to an existing task on both word overlap and meaning "
-    f"(both ≥ {SIM_PCT}%)."
+    f"Compare your instruction against the team tracker. Flagged when "
+    f"word overlap and meaning are both ≥ {SIM_PCT}%, or meaning alone ≥ {MEANING_BLOCK_PCT}%. "
+    f"Use 👁 review to read both prompts side-by-side."
 )
 SIMILARITY_TAB_HELP = (
     f"Compared from your zip's instruction.md against the team tracker. "
-    f"Change task only when word overlap and meaning are both ≥ {SIM_PCT}%."
+    f"Flagged when both ≥ {SIM_PCT}% or meaning ≥ {MEANING_BLOCK_PCT}%. "
+    f"Open 👁 review to compare full instructions."
 )
 MAX_INSTRUCTION_MD_MB = 5
 MAX_ZIP_MB = 200
@@ -250,22 +257,11 @@ with tab_instruction:
                 st.success(pre_result.get("message", "Instruction check passed."))
 
             if pre_result.get("matches"):
-                st.dataframe(
-                    [
-                        {
-                            "Task": m.task_id,
-                            "Trainer": m.trainer or "—",
-                            "Word overlap %": round((m.lexical_score or 0) * 100, 1),
-                            "Meaning %": (
-                                round(m.semantic_score * 100, 1)
-                                if m.semantic_score is not None else "—"
-                            ),
-                            "Too similar?": "YES" if m.dual_block else "No",
-                        }
-                        for m in pre_result["matches"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+                render_similarity_match_table(pre_result["matches"])
+                render_similarity_instruction_reviews(
+                    instruction_text,
+                    pre_result["matches"],
+                    key_prefix="pre_inst",
                 )
 
             pre_html = qe.render_instruction_precheck_html(pre_result, instruction_text, trainer_name)
@@ -279,7 +275,7 @@ with tab_instruction:
                 "instruction_precheck_report.html",
                 "instruction_precheck_report.json",
                 title="Instruction similarity report",
-                subtitle="Top matches, meaning-check status, and tracker load details.",
+                subtitle="Top matches, 👁 side-by-side instruction review, and tracker load details.",
                 key_prefix="dl_pre",
             )
 
@@ -290,22 +286,11 @@ with tab_instruction:
         st.caption(f"Last instruction check: **{status}** — run again to refresh or download reports.")
         if pre_result.get("matches"):
             with st.expander("Previous match table", expanded=False):
-                st.dataframe(
-                    [
-                        {
-                            "Task": m.task_id,
-                            "Trainer": m.trainer or "—",
-                            "Word overlap %": round((m.lexical_score or 0) * 100, 1),
-                            "Meaning %": (
-                                round(m.semantic_score * 100, 1)
-                                if m.semantic_score is not None else "—"
-                            ),
-                            "Too similar?": "YES" if m.dual_block else "No",
-                        }
-                        for m in pre_result["matches"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+                render_similarity_match_table(pre_result["matches"])
+                render_similarity_instruction_reviews(
+                    st.session_state.instruction_pre_text,
+                    pre_result["matches"],
+                    key_prefix="pre_persist",
                 )
         if st.button("Prepare instruction report downloads", key="prep_pre_dl"):
             st.session_state.show_pre_downloads = True
@@ -592,22 +577,11 @@ with tab_full_qc:
                 st.caption(SIMILARITY_TAB_HELP)
                 if report.instruction_matches:
                     st.markdown("**instruction.md vs team tracker sheet**")
-                    st.dataframe(
-                        [
-                            {
-                                "Task": m.task_id,
-                                "Trainer": m.trainer or "—",
-                                "Word overlap %": round((m.lexical_score or 0) * 100, 1),
-                                "Meaning %": (
-                                    round(m.semantic_score * 100, 1)
-                                    if m.semantic_score is not None else "—"
-                                ),
-                                "Too similar?": "YES" if m.dual_block else "No",
-                            }
-                            for m in report.instruction_matches
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
+                    render_similarity_match_table(report.instruction_matches)
+                    render_similarity_instruction_reviews(
+                        report.submitted_instruction,
+                        report.instruction_matches,
+                        key_prefix="qc_sim",
                     )
                 if report.spec_matches:
                     st.markdown("**SPEC.md matches (secondary)**")

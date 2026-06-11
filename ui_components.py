@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -438,6 +439,88 @@ def render_footer() -> None:
 
 def kb(size_bytes: int) -> str:
     return f"{max(size_bytes / 1024, 0.1):.1f} KB"
+
+
+def _similarity_flag_label(match: Any) -> str:
+    dual = getattr(match, "dual_block", False)
+    reason = getattr(match, "block_reason", "") or ""
+    if not dual:
+        return "No"
+    if reason == "meaning":
+        return "YES · meaning ≥70%"
+    if reason == "dual":
+        return "YES · both ≥60%"
+    return "YES"
+
+
+def render_similarity_match_table(matches: list[Any]) -> None:
+    if not matches:
+        return
+    st.dataframe(
+        [
+            {
+                "Task": m.task_id,
+                "Trainer": m.trainer or "—",
+                "Word overlap %": round((m.lexical_score or 0) * 100, 1),
+                "Meaning %": (
+                    round(m.semantic_score * 100, 1)
+                    if m.semantic_score is not None else "—"
+                ),
+                "Flagged?": _similarity_flag_label(m),
+                "👁 Review": "👁",
+            }
+            for m in matches
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_similarity_instruction_reviews(
+    your_instruction: str,
+    matches: list[Any],
+    *,
+    key_prefix: str = "sim",
+    max_reviews: int = 8,
+) -> None:
+    if not matches or not (your_instruction or "").strip():
+        return
+    st.markdown("**👁 Review instructions side-by-side**")
+    st.caption(
+        "Open each match to read your text next to the tracker instruction and judge "
+        "whether the task is truly too similar."
+    )
+    for i, m in enumerate(matches[:max_reviews]):
+        lex = round((m.lexical_score or 0) * 100, 1)
+        sem_pct = (
+            round(m.semantic_score * 100, 1)
+            if m.semantic_score is not None else None
+        )
+        sem_label = f"{sem_pct}%" if sem_pct is not None else "—"
+        flag = _similarity_flag_label(m)
+        title = f"👁 {m.task_id} · meaning {sem_label} · word {lex}% · {flag}"
+        with st.expander(title, expanded=bool(getattr(m, "dual_block", False) and i == 0)):
+            left, right = st.columns(2)
+            with left:
+                st.markdown("**Your instruction**")
+                st.text_area(
+                    "your_instruction",
+                    value=your_instruction,
+                    height=300,
+                    disabled=True,
+                    label_visibility="collapsed",
+                    key=f"{key_prefix}_yours_{i}",
+                )
+            with right:
+                st.markdown(f"**Tracker match** ({m.trainer or 'unknown trainer'})")
+                st.text_area(
+                    "tracker_instruction",
+                    value=getattr(m, "matched_instruction", "") or "",
+                    height=300,
+                    disabled=True,
+                    label_visibility="collapsed",
+                    key=f"{key_prefix}_tracker_{i}",
+                )
 
 
 def render_download_panel(
