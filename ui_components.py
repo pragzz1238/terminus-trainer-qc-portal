@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 
+APP_DIR = Path(__file__).resolve().parent
+FAVICON_PATH = APP_DIR / "favicon.ico"
 APP_VERSION = "1.0"
 PRODUCT_NAME = "Terminus Edition-2"
 PRODUCT_TAGLINE = "Task Quality Checker"
@@ -65,6 +70,11 @@ def inject_global_css() -> None:
         display: flex; align-items: center; justify-content: center;
         letter-spacing: -0.02em;
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+    .t-logo-img {
+        width: 44px; height: 44px; border-radius: 12px;
+        object-fit: contain; display: block;
+        box-shadow: var(--t-shadow);
     }
     .t-title { margin: 0; font-size: 1.35rem; font-weight: 700; color: var(--t-text); line-height: 1.2; }
     .t-subtitle { margin: 0.15rem 0 0 0; color: var(--t-muted); font-size: 0.92rem; }
@@ -214,17 +224,30 @@ def inject_global_css() -> None:
     )
 
 
+def _favicon_data_uri() -> str:
+    if not FAVICON_PATH.is_file():
+        return ""
+    encoded = base64.b64encode(FAVICON_PATH.read_bytes()).decode("ascii")
+    return f"data:image/x-icon;base64,{encoded}"
+
+
 def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
     llm_badge = (
         f'<span class="t-badge ok">LLM · {provider} · {model}</span>'
         if llm_ready
         else '<span class="t-badge warn">LLM not configured</span>'
     )
+    favicon_uri = _favicon_data_uri()
+    logo_html = (
+        f'<img src="{favicon_uri}" alt="Terminal Bench" class="t-logo-img" />'
+        if favicon_uri
+        else '<div class="t-logo">T2</div>'
+    )
     st.markdown(
         f"""
 <div class="t-topbar">
   <div class="t-brand">
-    <div class="t-logo">T2</div>
+    {logo_html}
     <div>
       <p class="t-title">{PRODUCT_NAME}</p>
       <p class="t-subtitle">{PRODUCT_TAGLINE}</p>

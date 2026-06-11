@@ -67,7 +67,7 @@ def _qc_engine():
 
 st.set_page_config(
     page_title="Terminus QC · Task Checker",
-    page_icon="📋",
+    page_icon=str(APP_DIR / "favicon.ico"),
     layout="wide",
     initial_sidebar_state="collapsed",
 )
