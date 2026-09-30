@@ -13,7 +13,7 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.3"
+APP_VERSION = "3.4"
 PRODUCT_NAME = "Cognyzer"
 PRODUCT_TAGLINE = "Terminal Bench · check instructions before you submit on Tela"
 
@@ -23,10 +23,10 @@ def inject_global_css() -> None:
         """
 <style>
     :root {
-        --t-bg: #0a0616;
-        --t-bg-elevated: #14121f;
-        --t-surface: #1a1726;
-        --t-border: #3f3f46;
+        --t-bg: #000000;
+        --t-bg-elevated: #18181b;
+        --t-surface: #18181b;
+        --t-border: #27272a;
         --t-text: #fafafa;
         --t-muted: #a1a1aa;
         --t-accent: #ff5c33;
@@ -45,8 +45,11 @@ def inject_global_css() -> None:
     .stApp {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    h1, h2, h3, h4, h5, h6, p, label, span, .stMarkdown, .stCaption {
+    h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stCaption {
         color: var(--t-text) !important;
+    }
+    .block-container span:not([data-testid="stMarkdownContainer"] *) {
+        color: inherit;
     }
     .stCaption, small, [data-testid="stMarkdownContainer"] p {
         color: var(--t-muted) !important;
@@ -91,6 +94,19 @@ def inject_global_css() -> None:
         background-color: #ff704d !important;
         border-color: #ff5c33 !important;
         color: #fff !important;
+    }
+    .stButton > button[kind="primary"] *,
+    div[data-testid="stButton"] > button[kind="primary"] *,
+    button[data-testid="stBaseButton-primary"],
+    button[data-testid="stBaseButton-primary"] * {
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+    div[data-testid="stDownloadButton"] > button,
+    div[data-testid="stDownloadButton"] > button * {
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
     }
     .block-container {
         padding-top: 1.25rem;
