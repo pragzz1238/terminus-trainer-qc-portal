@@ -145,6 +145,10 @@ if "instruction_pre_result" not in st.session_state:
     st.session_state.instruction_pre_result = None
 if "instruction_pre_text" not in st.session_state:
     st.session_state.instruction_pre_text = ""
+if "instruction_check_pending" not in st.session_state:
+    st.session_state.instruction_check_pending = False
+if "instruction_check_text" not in st.session_state:
+    st.session_state.instruction_check_text = ""
 if "qc_cache" not in st.session_state:
     st.session_state.qc_cache = None
 if "rubric_pre_text" not in st.session_state:
@@ -233,24 +237,34 @@ with tab_instruction:
                 f"Maximum is {MAX_INSTRUCTION_MD_MB} MB."
             )
         else:
-            qe = _qc_engine()
-            try:
-                with st.spinner("Comparing your instruction with every task in Tela…"):
-                    pre_result = qe.check_instruction_similarity(
-                        instruction_text=instruction_text,
-                        sheet_url=sheet_url,
-                        worksheet=worksheet,
-                        task_col=task_col,
-                        instruction_col=instruction_col,
-                        trainer_col=trainer_col,
-                        instruction_col_index=instruction_col_index,
-                        corpus_json_path=corpus_path if not sheet_url.strip() else "",
-                        api_key=resolve_openai_api_key(),
-                    )
-            except Exception as exc:
-                st.error("Instruction check failed — see details below.")
-                st.exception(exc)
-            else:
+            st.session_state.instruction_check_text = instruction_text
+            st.session_state.instruction_check_pending = True
+            st.rerun()
+
+    if st.session_state.instruction_check_pending:
+        instruction_text = st.session_state.instruction_check_text
+        st.session_state.instruction_check_pending = False
+        qe = _qc_engine()
+        try:
+            with st.status("Checking your instruction…", expanded=True) as check_status:
+                check_status.write("Loading instructions from Tela…")
+                pre_result = qe.check_instruction_similarity(
+                    instruction_text=instruction_text,
+                    sheet_url=sheet_url,
+                    worksheet=worksheet,
+                    task_col=task_col,
+                    instruction_col=instruction_col,
+                    trainer_col=trainer_col,
+                    instruction_col_index=instruction_col_index,
+                    corpus_json_path=corpus_path if not sheet_url.strip() else "",
+                    api_key=resolve_openai_api_key(),
+                )
+                check_status.write("Scoring cosine and embedding similarity…")
+                check_status.update(label="Check complete", state="complete", expanded=False)
+        except Exception as exc:
+            st.error("Instruction check failed — see details below.")
+            st.exception(exc)
+        else:
                 st.session_state.instruction_pre_text = instruction_text
                 st.session_state.instruction_pre_result = pre_result
                 if pre_result.get("tracker_instructions"):

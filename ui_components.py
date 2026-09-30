@@ -13,7 +13,7 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.5"
+APP_VERSION = "3.6"
 PRODUCT_NAME = "Cognyzer"
 PRODUCT_TAGLINE = "Terminal Bench · check instructions before you submit on Tela"
 

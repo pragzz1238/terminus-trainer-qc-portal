@@ -730,16 +730,24 @@ def check_instruction_similarity(
         pass_message = ("CANNOT CONFIRM: Tela's instructions could not be loaded, so this instruction was not "
                         "compared with anything. Do not upload on this result. " + " ".join(load_notes))
     elif not instructions:
-        pass_message = (f"CAN UPLOAD: no tasks have been submitted in Tela yet, so there is nothing to be "
-                        f"similar to (upload blocked at {SEMANTIC_BLOCK_PCT}%).")
+        pass_message = (
+            "CAN UPLOAD: Tela has no instructions in the similarity set yet "
+            "(submitted, rework, approved, or rejected). Nothing to compare against — you may upload."
+        )
     elif not run_meta.get("embedding_ran"):
-        pass_message = (f"CAN UPLOAD on cosine similarity ({top_pct}% at most, limit {SEMANTIC_BLOCK_PCT}%), but the embedding "
-                        "check did not run. Ask the admin to fix the API key and check again before uploading.")
+        pass_message = (
+            f"CAN UPLOAD on cosine only (highest {top_pct}%, limit {SEMANTIC_BLOCK_PCT}%): "
+            f"none of the {len(instructions)} tasks in Tela are similar enough to block upload, "
+            "but the embedding check did not run. Fix the API key and re-check before uploading."
+        )
         blocked = True
     else:
-        pass_message = (f"CAN UPLOAD: highest similarity to any of the {len(instructions)} tasks in Tela is "
-                        f"{top_pct}% (limit {SEMANTIC_BLOCK_PCT}%)"
-                        + (f", closest: {top.task_id}." if top is not None else "."))
+        closest = f" Closest match: {top.task_id} at {top_pct}%." if top is not None else ""
+        pass_message = (
+            f"CAN UPLOAD: Compared with {len(instructions)} tasks in Tela — "
+            f"nothing is ≥ {SEMANTIC_BLOCK_PCT}% similar to your instruction "
+            f"(highest score {top_pct}%).{closest}"
+        )
 
     tracker_instructions = enrich_similarity_match_texts(
         matches,
@@ -824,7 +832,7 @@ def render_instruction_precheck_html(
     data = instruction_precheck_to_dict(result, instruction_text, trainer_name)
     blocked = data["blocked"]
     color = "#e74c3c" if blocked else "#2ecc71"
-    status = "CHANGE TASK" if blocked else "OK TO PROCEED"
+    status = "CANNOT UPLOAD" if blocked else "CAN UPLOAD"
     tracker_map = data.get("tracker_instructions") or {}
 
     rows = ""
