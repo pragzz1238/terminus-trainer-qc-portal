@@ -13,7 +13,7 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.2"
+APP_VERSION = "3.3"
 PRODUCT_NAME = "Cognyzer"
 PRODUCT_TAGLINE = "Terminal Bench · check instructions before you submit on Tela"
 
@@ -23,23 +23,55 @@ def inject_global_css() -> None:
         """
 <style>
     :root {
-        --t-bg: #fafafa;
-        --t-surface: #ffffff;
-        --t-border: #e4e4e7;
-        --t-text: #18181b;
-        --t-muted: #71717a;
+        --t-bg: #0a0616;
+        --t-bg-elevated: #14121f;
+        --t-surface: #1a1726;
+        --t-border: #3f3f46;
+        --t-text: #fafafa;
+        --t-muted: #a1a1aa;
         --t-accent: #ff5c33;
-        --t-accent-soft: #fff7ed;
         --t-brand-grad: linear-gradient(90deg, #ffb800 0%, #ff5c33 40%, #d6249f 75%, #8224e3 100%);
-        --t-pass: #047857;
-        --t-fail: #b91c1c;
-        --t-warn: #b45309;
-        --t-shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 8px 24px rgba(24, 24, 27, 0.06);
+        --t-pass: #34d399;
+        --t-fail: #f87171;
+        --t-warn: #fbbf24;
+        --t-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    }
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    .main .block-container {
+        background-color: var(--t-bg) !important;
+        color: var(--t-text);
     }
     .stApp {
-        background: var(--t-bg);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: var(--t-text);
+    }
+    h1, h2, h3, h4, h5, h6, p, label, span, .stMarkdown, .stCaption {
+        color: var(--t-text) !important;
+    }
+    .stCaption, small, [data-testid="stMarkdownContainer"] p {
+        color: var(--t-muted) !important;
+    }
+    textarea, input, select {
+        background-color: var(--t-bg-elevated) !important;
+        color: var(--t-text) !important;
+        border-color: var(--t-border) !important;
+    }
+    div[data-baseweb="select"] > div {
+        background-color: var(--t-bg-elevated) !important;
+    }
+    .stButton > button[kind="secondary"],
+    div[data-testid="stButton"] > button:not([kind="primary"]) {
+        background: var(--t-surface) !important;
+        color: var(--t-text) !important;
+        border: 1px solid var(--t-border) !important;
+    }
+    [data-testid="stExpander"] details {
+        background: var(--t-surface);
+        border: 1px solid var(--t-border);
+        border-radius: 12px;
+    }
+    [data-testid="stAlert"] {
+        background-color: var(--t-surface) !important;
     }
     /* Streamlit primary actions — solid Cognyzer orange (overrides theme teal below) */
     .stButton > button[kind="primary"],
@@ -80,8 +112,8 @@ def inject_global_css() -> None:
 
     .t-topbar {
         display: flex; align-items: center; justify-content: space-between;
-        background: #0a0616;
-        border: 1px solid #27272a;
+        background: var(--t-surface);
+        border: 1px solid var(--t-border);
         border-radius: 16px;
         padding: 1.1rem 1.35rem;
         margin-bottom: 1rem;
@@ -124,8 +156,8 @@ def inject_global_css() -> None:
         padding: 0.75rem 0.9rem;
         text-align: left;
     }
-    .t-step.active { border-color: #fdba74; background: #fff7ed; box-shadow: inset 0 0 0 1px #fed7aa; }
-    .t-step.done { border-color: #bbf7d0; background: #f0fdf4; }
+    .t-step.active { border-color: #ff5c33; background: rgba(255, 92, 51, 0.08); }
+    .t-step.done { border-color: #34d399; background: rgba(52, 211, 153, 0.08); }
     .t-step-num {
         display: inline-block; font-size: 0.72rem; font-weight: 700;
         color: var(--t-accent); letter-spacing: 0.06em; text-transform: uppercase;
@@ -148,7 +180,7 @@ def inject_global_css() -> None:
     .t-panel-desc { margin: 0.25rem 0 0 0; color: var(--t-muted); font-size: 0.88rem; line-height: 1.45; }
     .t-step-pill {
         flex-shrink: 0;
-        background: #f1f5f9; color: #475569;
+        background: var(--t-bg-elevated); color: var(--t-muted);
         border: 1px solid var(--t-border);
         border-radius: 999px; padding: 0.28rem 0.7rem;
         font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em;
@@ -185,8 +217,8 @@ def inject_global_css() -> None:
         border: 1px solid var(--t-border);
         display: flex; align-items: center; justify-content: space-between; gap: 1rem;
     }
-    .t-verdict.pass { background: #ecfdf5; border-color: #6ee7b7; }
-    .t-verdict.fail { background: #fef2f2; border-color: #fca5a5; }
+    .t-verdict.pass { background: rgba(52, 211, 153, 0.1); border-color: #34d399; }
+    .t-verdict.fail { background: rgba(248, 113, 113, 0.1); border-color: #f87171; }
     .t-verdict .title { margin: 0; font-size: 1.15rem; font-weight: 700; }
     .t-verdict.pass .title { color: var(--t-pass); }
     .t-verdict.fail .title { color: var(--t-fail); }
@@ -194,19 +226,19 @@ def inject_global_css() -> None:
 
     .t-download {
         background: var(--t-surface);
-        border: 1px solid #bfdbfe;
+        border: 1px solid var(--t-border);
         border-radius: 14px;
         padding: 1.1rem 1.25rem;
         margin: 1rem 0 1.25rem 0;
         box-shadow: var(--t-shadow);
     }
-    .t-download h3 { margin: 0 0 0.3rem 0; color: #1e3a8a; font-size: 1rem; font-weight: 700; }
+    .t-download h3 { margin: 0 0 0.3rem 0; color: var(--t-text); font-size: 1rem; font-weight: 700; }
     .t-download p { margin: 0; color: var(--t-muted); font-size: 0.88rem; }
 
     .t-instr-scroll {
         max-height: min(72vh, 720px);
         overflow: auto;
-        background: #f8fafc;
+        background: var(--t-bg-elevated);
         border: 1px solid var(--t-border);
         border-radius: 10px;
         padding: 14px 16px;
@@ -226,14 +258,25 @@ def inject_global_css() -> None:
         color: var(--t-muted); font-size: 0.8rem; text-align: center;
     }
 
-    .stTabs [data-baseweb="tab-list"] { gap: 0.35rem; }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.35rem;
+        background: transparent;
+    }
     .stTabs [data-baseweb="tab"] {
         height: 2.6rem; border-radius: 10px 10px 0 0;
         padding-left: 1rem; padding-right: 1rem;
         font-weight: 600; font-size: 0.88rem;
+        color: var(--t-muted) !important;
+        background: transparent !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: var(--t-text) !important;
+        border-bottom-color: #ff5c33 !important;
     }
     div[data-testid="stFileUploader"] section {
-        border: 1px dashed #cbd5e1; border-radius: 12px; background: #f8fafc;
+        border: 1px dashed var(--t-border);
+        border-radius: 12px;
+        background: var(--t-bg-elevated);
     }
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-color: var(--t-border) !important;
@@ -241,7 +284,12 @@ def inject_global_css() -> None:
         box-shadow: var(--t-shadow);
         padding: 0.35rem 0.15rem 0.15rem;
         margin-bottom: 0.75rem;
-        background: var(--t-surface);
+        background: var(--t-surface) !important;
+    }
+    [data-testid="stDataFrame"] {
+        border: 1px solid var(--t-border);
+        border-radius: 12px;
+        overflow: hidden;
     }
 </style>
 """,
@@ -418,7 +466,7 @@ def render_footer() -> None:
     st.markdown(
         f"""
 <div class="t-footer">
-  <a href="https://www.cognyzer.com" style="color:#71717a;text-decoration:none;">Cognyzer</a>
+  <a href="https://www.cognyzer.com" style="color:#a1a1aa;text-decoration:none;">Cognyzer</a>
   · Trainer QC v{APP_VERSION} · Reports stay in your browser session
 </div>
 """,
