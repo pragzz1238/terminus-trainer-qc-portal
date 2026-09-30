@@ -478,7 +478,15 @@ def load_reference_from_tela() -> tuple[dict[str, str], dict[str, dict[str, str]
         return {}, {}, ["Tela not configured (no TELA_SYNC_TOKEN in secrets): Tela instructions were not loaded."]
     resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
     if resp.status_code != 200:
-        return {}, {}, [f"Tela instructions API returned {resp.status_code}: {resp.text[:200]}"]
+        hint = ""
+        if resp.status_code in (401, 403):
+            hint = (
+                " Use TELA_SYNC_TOKEN = Terminal Bench lw_ project token (tasks:read) "
+                "or SNORKEL_SYNC_TOKEN from Vercel."
+            )
+        return {}, {}, [
+            f"Tela instructions API returned {resp.status_code}: {resp.text[:200]}.{hint}"
+        ]
     rows = resp.json().get("rows", [])
     instructions: dict[str, str] = {}
     meta: dict[str, dict[str, str]] = {}

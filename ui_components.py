@@ -13,9 +13,9 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.0"
-PRODUCT_NAME = "Terminus 3"
-PRODUCT_TAGLINE = "Task Quality Checker"
+APP_VERSION = "3.1"
+PRODUCT_NAME = "Cognyzer"
+PRODUCT_TAGLINE = "Terminal Bench · Trainer QC"
 
 
 def inject_global_css() -> None:
@@ -23,21 +23,32 @@ def inject_global_css() -> None:
         """
 <style>
     :root {
-        --t-bg: #f4f6f9;
+        --t-bg: #fafafa;
         --t-surface: #ffffff;
-        --t-border: #dde3ea;
-        --t-text: #0f172a;
-        --t-muted: #64748b;
-        --t-accent: #0f766e;
-        --t-accent-soft: #ecfdf5;
+        --t-border: #e4e4e7;
+        --t-text: #18181b;
+        --t-muted: #71717a;
+        --t-accent: #ff5c33;
+        --t-accent-soft: #fff7ed;
+        --t-brand-grad: linear-gradient(90deg, #ffb800 0%, #ff5c33 40%, #d6249f 75%, #8224e3 100%);
         --t-pass: #047857;
         --t-fail: #b91c1c;
         --t-warn: #b45309;
-        --t-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px rgba(15, 23, 42, 0.06);
+        --t-shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 8px 24px rgba(24, 24, 27, 0.06);
     }
     .stApp {
-        background: linear-gradient(180deg, #f8fafc 0%, var(--t-bg) 120px, var(--t-bg) 100%);
+        background: var(--t-bg);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--t-text);
+    }
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background: var(--t-brand-grad) !important;
+        border: none !important;
+        color: #fff !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stButton"] > button[kind="primary"]:hover {
+        filter: brightness(1.05);
     }
     .block-container {
         padding-top: 1.25rem;
@@ -69,11 +80,11 @@ def inject_global_css() -> None:
     .t-brand { display: flex; align-items: center; gap: 0.9rem; }
     .t-logo {
         width: 44px; height: 44px; border-radius: 12px;
-        background: linear-gradient(145deg, #115e59 0%, #0f766e 100%);
-        color: #fff; font-weight: 700; font-size: 0.95rem;
+        background: var(--t-brand-grad);
+        color: #fff; font-weight: 700; font-size: 0.72rem;
         display: flex; align-items: center; justify-content: center;
         letter-spacing: -0.02em;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+        box-shadow: var(--t-shadow);
     }
     .t-logo-img {
         width: 44px; height: 44px; border-radius: 12px;
@@ -89,13 +100,14 @@ def inject_global_css() -> None:
         font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
         border: 1px solid var(--t-border); background: #f8fafc; color: #334155;
     }
-    .t-badge.ok { background: var(--t-accent-soft); border-color: #99f6e4; color: #115e59; }
+    .t-badge.ok { background: var(--t-accent-soft); border-color: #fed7aa; color: #9a3412; }
     .t-badge.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
 
     .t-hero {
         background: var(--t-surface);
         border: 1px solid var(--t-border);
-        border-left: 4px solid var(--t-accent);
+        border-left: 4px solid transparent;
+        border-image: var(--t-brand-grad) 1;
         border-radius: 16px;
         padding: 1.25rem 1.4rem;
         margin-bottom: 1.25rem;
@@ -115,7 +127,7 @@ def inject_global_css() -> None:
         padding: 0.75rem 0.9rem;
         text-align: left;
     }
-    .t-step.active { border-color: #5eead4; background: #f0fdfa; box-shadow: inset 0 0 0 1px #99f6e4; }
+    .t-step.active { border-color: #fdba74; background: #fff7ed; box-shadow: inset 0 0 0 1px #fed7aa; }
     .t-step.done { border-color: #bbf7d0; background: #f0fdf4; }
     .t-step-num {
         display: inline-block; font-size: 0.72rem; font-weight: 700;
@@ -268,7 +280,7 @@ def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
     logo_html = (
         f'<img src="{favicon_uri}" alt="Terminal Bench" class="t-logo-img" />'
         if favicon_uri
-        else '<div class="t-logo">T3</div>'
+        else '<div class="t-logo">CZ</div>'
     )
     st.markdown(
         f"""
@@ -281,8 +293,7 @@ def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
     </div>
   </div>
   <div class="t-badge-row">
-    <span class="t-badge">Terminal-Bench</span>
-    <span class="t-badge">T3 panel rehearsal</span>
+    <span class="t-badge">tela.cognyzer.com</span>
     {llm_badge}
   </div>
 </div>
@@ -295,11 +306,9 @@ def render_hero() -> None:
     st.markdown(
         """
 <div class="t-hero">
-  <h2>Pre-submission quality gate for trainer tasks</h2>
-  <p>Run <strong>instruction similarity</strong> or <strong>full task QC</strong> independently.
-  Full task QC follows the Terminus 3 pipeline: CI and preflight rules, similarity against every task in
-  Tela, then an LLM rehearsal of the quality gate, the <code>stb</code> LLMaJ checks and the
-  five-axis <strong>quality panel</strong>, with the same blocking rules.</p>
+  <h2>Pre-submission check for Terminal Bench tasks</h2>
+  <p>Compare your instruction to every task in <strong>Tela</strong>, or run full task QC
+  (rules, similarity, and LLM quality panel). Screenshot the similarity result when Tela asks for it.</p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -425,8 +434,8 @@ def render_footer() -> None:
     st.markdown(
         f"""
 <div class="t-footer">
-  Cognyzer · Snorkel Terminal-Bench trainer tool · {PRODUCT_NAME} QC v{APP_VERSION}
-  · Reports generated in-session · API keys admin-only
+  <a href="https://www.cognyzer.com" style="color:#71717a;text-decoration:none;">Cognyzer</a>
+  · Trainer QC v{APP_VERSION} · Reports stay in your browser session
 </div>
 """,
         unsafe_allow_html=True,
