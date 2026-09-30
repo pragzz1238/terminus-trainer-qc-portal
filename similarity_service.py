@@ -32,6 +32,7 @@ from tracker_defaults import (
     INSTRUCTION_SIM_THRESHOLD,
     INSTRUCTION_SIM_BLOCK,
     INSTRUCTION_SIM_WARN,
+    INSTRUCTION_TOP_MATCHES,
     TASK_INSTRUCTION_HEADER,
     TRACKER_COL_TASK_INSTRUCTION,
 )
@@ -595,7 +596,7 @@ def run_instruction_similarity(
         meta,
         exclude_keys=exclude,
         api_key=api_key,
-        top_n=10,
+        top_n=INSTRUCTION_TOP_MATCHES,
         tracker_cache=tracker_cache,
     )
     hits = result.hits
@@ -640,10 +641,7 @@ def run_instruction_similarity(
     if blocked:
         top = next(m for m in inst_matches if m.dual_block)
         block_message = (
-            f"CANNOT UPLOAD: Too similar to **{top.task_id}** "
-            f"(cosine {round(top.lexical_score * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}%). "
-            f"Compare full instructions below."
+            f"CANNOT UPLOAD: Too similar to **{top.task_id}** — compare below."
         )
         notes.append(block_message)
     elif hits and sim_meta.embedding_ran:
@@ -722,30 +720,26 @@ def check_instruction_similarity(
             + " ".join(load_notes)
         )
     elif not instructions:
-        pass_message = "CAN UPLOAD: No other instructions in Tela to compare yet."
+        pass_message = "CAN UPLOAD: Nothing to compare yet."
     elif not run_meta.get("embedding_ran"):
-        closest = f" Closest: {top.task_id}." if top is not None else ""
         pass_message = (
-            f"CAN UPLOAD: Highest similarity among {len(instructions)} tasks is {top_pct}%"
-            f"{closest} (embedding check did not run — re-check when fixed)."
+            f"CAN UPLOAD: Highest match {top_pct}% "
+            "(embedding check did not run — re-check when fixed)."
         )
         blocked = True
     else:
-        closest = f" Closest: {top.task_id}." if top is not None else ""
-        pass_message = (
-            f"CAN UPLOAD: Not similar to other tasks in Tela — highest match {top_pct}%"
-            f" among {len(instructions)} tasks.{closest}"
-        )
+        pass_message = f"CAN UPLOAD: Highest match {top_pct}%."
 
     tracker_instructions = enrich_similarity_match_texts(
         matches,
         instructions,
     )
+    display_matches = matches[:INSTRUCTION_TOP_MATCHES] if blocked else []
 
     return {
         "blocked": blocked,
         "message": pass_message,
-        "matches": matches,
+        "matches": display_matches,
         "query_instruction": instruction_text,
         "tracker_instructions": tracker_instructions,
         "notes": notes,
@@ -822,9 +816,10 @@ def render_instruction_precheck_html(
     color = "#e74c3c" if blocked else "#2ecc71"
     status = "CANNOT UPLOAD" if blocked else "CAN UPLOAD"
     tracker_map = data.get("tracker_instructions") or {}
+    report_matches = data["matches"] if blocked else []
 
     rows = ""
-    for m in data["matches"]:
+    for m in report_matches:
         emb = m["embedding_percent"]
         emb_s = f"{emb}%" if emb is not None else "—"
         flag = m.get("flag_label") or ("YES" if m["dual_block"] else "No")
@@ -832,16 +827,17 @@ def render_instruction_precheck_html(
         rows += (
             f"<tr><td>{task_id}</td><td>{html_module.escape(m['trainer'] or '—')}</td>"
             f"<td>{m['lexical_percent']}%</td><td>{emb_s}</td>"
-            f"<td>{html_module.escape(flag)}</td>"
-            f"<td><a href=\"#review-{task_id}\">👁 Compare</a></td></tr>"
+            f"<td>{html_module.escape(flag)}</td></tr>"
         )
-    if not rows:
-        rows = "<tr><td colspan='6'>No matches returned.</td></tr>"
 
-    comparison_html = _html_instruction_comparison_section(
-        instruction_text,
-        data["matches"],
-        tracker_map,
+    comparison_html = (
+        _html_instruction_comparison_section(
+            instruction_text,
+            report_matches,
+            tracker_map,
+        )
+        if report_matches
+        else ""
     )
 
     embed_status = "Ran" if data["embedding_ran"] else "Did not run"
@@ -869,20 +865,9 @@ def render_instruction_precheck_html(
     <p><strong>Trainer:</strong> {html_module.escape(trainer_name or "Not provided")}</p>
     <p><strong>Generated:</strong> {data["timestamp"]}</p>
     <p>{html_module.escape(data["message"])}</p>
-    <p><strong>Corpus:</strong> {data["corpus_count"]} instructions ·
-       <strong>Embedding:</strong> {html_module.escape(embed_status)} ({html_module.escape(data["embed_model"])}) ·
-       <strong>Block threshold:</strong> {data["semantic_block_threshold_percent"]}% similarity</p>
+    <p><strong>Embedding:</strong> {html_module.escape(embed_status)} ({html_module.escape(data["embed_model"])})</p>
   </div>
-
-  <h2>Similarity scores (top matches)</h2>
-  <table>
-    <tr><th>Task</th><th>Trainer</th><th>Cosine %</th><th>Embedding %</th><th>Flagged?</th><th>Review</th></tr>
-    {rows}
-  </table>
-
-  <h2>👁 Full instruction comparison</h2>
-  <p>Each block shows <strong>your complete instruction</strong> next to the <strong>full tracker instruction</strong> for that row, with scores in the header. Use this to decide whether the task is truly too similar.</p>
-  {comparison_html}
+  {("<h2>Closest matches</h2><table><tr><th>Task</th><th>Trainer</th><th>Cosine %</th><th>Embedding %</th><th>Flagged?</th></tr>" + rows + "</table><h2>Instruction comparison</h2>" + comparison_html) if report_matches else ""}
 
   <h2>Diagnostics</h2>
   <ul>{notes_html}</ul>

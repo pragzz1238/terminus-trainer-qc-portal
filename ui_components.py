@@ -13,7 +13,7 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.7"
+APP_VERSION = "3.8"
 PRODUCT_NAME = "Cognyzer"
 PRODUCT_TAGLINE = "Terminal Bench · check instructions before you submit on Tela"
 
@@ -571,7 +571,7 @@ def render_similarity_instruction_reviews(
     matches: list[Any],
     *,
     key_prefix: str = "sim",
-    max_reviews: int = 10,
+    max_reviews: int = 3,
     tracker_instructions: dict[str, str] | None = None,
     corpus_instructions: dict[str, str] | None = None,
 ) -> None:

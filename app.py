@@ -270,12 +270,7 @@ with tab_instruction:
                 if pre_result.get("tracker_instructions"):
                     st.session_state.tracker_instruction_cache = pre_result["tracker_instructions"]
 
-                if pre_result.get("embedding_ran"):
-                    st.info(
-                        f"Meaning check completed ({pre_result.get('api_provider', 'OpenAI')}) "
-                        f"against **{pre_result.get('corpus_size', 0)}** Tela instructions."
-                    )
-                elif pre_result.get("embedding_error"):
+                if pre_result.get("embedding_error"):
                     st.warning(f"Meaning check did not run: {pre_result['embedding_error']}")
                 elif not pre_result.get("api_key_present") and not llm_ready:
                     st.warning(
@@ -289,23 +284,21 @@ with tab_instruction:
                         "Meaning check did not complete — see **Tela load details** and download the report below."
                     )
 
-                corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
                 from datetime import datetime, timezone
 
                 verdict_msg = pre_result.get("message") or qe.CHANGE_TASK_MESSAGE
                 (st.error if pre_result.get("blocked") else st.success)(f"### {verdict_msg}")
                 st.caption(
                     f"Checked {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · "
-                    f"trainer {trainer_name or 'not given'} · {corpus_count} tasks in Tela · "
-                    f"screenshot for your Tela submission"
+                    f"{trainer_name or 'trainer not given'} · screenshot for Tela submit"
                 )
 
                 if pre_result.get("notes"):
-                    with st.expander("Tela load details", expanded=corpus_count == 0):
+                    with st.expander("Details", expanded=False):
                         for note in pre_result["notes"]:
                             st.write(f"- {note}")
 
-                if pre_result.get("matches"):
+                if pre_result.get("blocked") and pre_result.get("matches"):
                     tracker_maps = _instruction_review_tracker_maps(
                         pre_result,
                         sheet_url=sheet_url,
@@ -322,6 +315,7 @@ with tab_instruction:
                         instruction_text,
                         pre_result["matches"],
                         key_prefix="pre_inst",
+                        max_reviews=3,
                         tracker_instructions=tracker_maps,
                     )
 
@@ -336,7 +330,7 @@ with tab_instruction:
                     "instruction_precheck_report.html",
                     "instruction_precheck_report.json",
                     title="Instruction similarity report",
-                    subtitle="Top matches, 👁 side-by-side instruction review, and tracker load details.",
+                    subtitle="Screenshot the HTML report for Tela if needed.",
                     key_prefix="dl_pre",
                 )
 
@@ -345,7 +339,7 @@ with tab_instruction:
         blocked = pre_result.get("blocked")
         status = "blocked" if blocked else "passed"
         st.caption(f"Last instruction check: **{status}** — run again to refresh or download reports.")
-        if pre_result.get("matches"):
+        if pre_result.get("blocked") and pre_result.get("matches"):
             tracker_maps = _instruction_review_tracker_maps(
                 pre_result,
                 sheet_url=sheet_url,
@@ -362,6 +356,7 @@ with tab_instruction:
                 st.session_state.instruction_pre_text,
                 pre_result["matches"],
                 key_prefix="pre_persist",
+                max_reviews=3,
                 tracker_instructions=tracker_maps,
             )
         qe = _qc_engine()
