@@ -126,7 +126,7 @@ def _qc_engine():
 
 
 st.set_page_config(
-    page_title="Terminus QC · Task Checker",
+    page_title="Cognyzer · Terminal Bench Trainer QC",
     page_icon="favicon.png",
     layout="wide",
     initial_sidebar_state="collapsed",

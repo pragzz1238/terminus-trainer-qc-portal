@@ -481,8 +481,8 @@ def load_reference_from_tela() -> tuple[dict[str, str], dict[str, dict[str, str]
         hint = ""
         if resp.status_code in (401, 403):
             hint = (
-                " Use TELA_SYNC_TOKEN = Terminal Bench lw_ project token (tasks:read) "
-                "or SNORKEL_SYNC_TOKEN from Vercel."
+                " Set TELA_SYNC_TOKEN in Streamlit secrets to your Terminal Bench "
+                "lw_ project token (tasks:read)."
             )
         return {}, {}, [
             f"Tela instructions API returned {resp.status_code}: {resp.text[:200]}.{hint}"
@@ -880,7 +880,7 @@ def render_instruction_precheck_html(
 
   <h2>Similarity scores (top matches)</h2>
   <table>
-    <tr><th>Task</th><th>Trainer</th><th>Word overlap</th><th>Meaning</th><th>Flagged?</th><th>Review</th></tr>
+    <tr><th>Task</th><th>Trainer</th><th>Cosine %</th><th>Embedding %</th><th>Flagged?</th><th>Review</th></tr>
     {rows}
   </table>
 
@@ -890,7 +890,8 @@ def render_instruction_precheck_html(
 
   <h2>Diagnostics</h2>
   <ul>{notes_html}</ul>
-  <p><em>Re-download after re-running the check if tracker instructions appear empty.</em></p>
+  <p><em>Re-download after re-running the check if Tela instructions appear empty.</em></p>
+  <p style="margin-top:24px;color:#71717a;font-size:12px;">Cognyzer · Terminal Bench · Trainer QC</p>
 </body>
 </html>"""
 
