@@ -40,10 +40,7 @@ SIM_THRESHOLD_BLOCK = INSTRUCTION_SIM_BLOCK
 SEMANTIC_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
 DUAL_BLOCK_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
 BUNDLED_CORPUS_PATH = Path(__file__).resolve().parent / "terminus_task_corpus.json"
-CHANGE_TASK_MESSAGE = (
-    f"CANNOT UPLOAD: this instruction is {SEMANTIC_BLOCK_PCT}% or more similar to a task already in Tela. "
-    "Change the task before uploading."
-)
+CHANGE_TASK_MESSAGE = "CANNOT UPLOAD: Too similar to an existing task — compare instructions below."
 
 TASK_REQUIRED_FILES: dict[str, str] = {
     "task.toml": "Task metadata file",
@@ -642,30 +639,23 @@ def run_instruction_similarity(
     block_message = ""
     if blocked:
         top = next(m for m in inst_matches if m.dual_block)
-        reason_note = (
-            f"meaning ≥ {SEMANTIC_BLOCK_PCT}%"
-            if top.block_reason == "meaning"
-            else f"cosine similarity ≥ {DUAL_BLOCK_PCT}%"
-        )
         block_message = (
-            f"{CHANGE_TASK_MESSAGE} Closest match: {top.task_id}"
-            f" (trainer: {top.trainer or 'unknown'}) — "
-            f"cosine {round(top.lexical_score * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}% "
-            f"({reason_note}). Use 👁 review below to compare instructions."
+            f"CANNOT UPLOAD: Too similar to **{top.task_id}** "
+            f"(cosine {round(top.lexical_score * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}%). "
+            f"Compare full instructions below."
         )
         notes.append(block_message)
     elif hits and sim_meta.embedding_ran:
         top = hits[0]
         notes.append(
-            f"Top match — cosine {round(top.lexical_score * 100)}%, "
-            f"embedding {round((top.semantic_score or 0) * 100)}% "
-            f"(upload blocked at {SEMANTIC_BLOCK_PCT}%)"
+            f"Closest task — cosine {round(top.lexical_score * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}%"
         )
     elif hits:
         top = hits[0]
         notes.append(
-            f"Top match — cosine {round(top.lexical_score * 100)}% only "
+            f"Closest task — cosine {round(top.lexical_score * 100)}% "
             f"(embedding check unavailable)"
         )
 
@@ -727,26 +717,24 @@ def check_instruction_similarity(
         pass_message = block_message
     elif not tela_ok:
         blocked = True
-        pass_message = ("CANNOT CONFIRM: Tela's instructions could not be loaded, so this instruction was not "
-                        "compared with anything. Do not upload on this result. " + " ".join(load_notes))
-    elif not instructions:
         pass_message = (
-            "CAN UPLOAD: Tela has no instructions in the similarity set yet "
-            "(submitted, rework, approved, or rejected). Nothing to compare against — you may upload."
+            "CANNOT CONFIRM: Could not load instructions from Tela — nothing was compared. "
+            + " ".join(load_notes)
         )
+    elif not instructions:
+        pass_message = "CAN UPLOAD: No other instructions in Tela to compare yet."
     elif not run_meta.get("embedding_ran"):
+        closest = f" Closest: {top.task_id}." if top is not None else ""
         pass_message = (
-            f"CAN UPLOAD on cosine only (highest {top_pct}%, limit {SEMANTIC_BLOCK_PCT}%): "
-            f"none of the {len(instructions)} tasks in Tela are similar enough to block upload, "
-            "but the embedding check did not run. Fix the API key and re-check before uploading."
+            f"CAN UPLOAD: Highest similarity among {len(instructions)} tasks is {top_pct}%"
+            f"{closest} (embedding check did not run — re-check when fixed)."
         )
         blocked = True
     else:
-        closest = f" Closest match: {top.task_id} at {top_pct}%." if top is not None else ""
+        closest = f" Closest: {top.task_id}." if top is not None else ""
         pass_message = (
-            f"CAN UPLOAD: Compared with {len(instructions)} tasks in Tela — "
-            f"nothing is ≥ {SEMANTIC_BLOCK_PCT}% similar to your instruction "
-            f"(highest score {top_pct}%).{closest}"
+            f"CAN UPLOAD: Not similar to other tasks in Tela — highest match {top_pct}%"
+            f" among {len(instructions)} tasks.{closest}"
         )
 
     tracker_instructions = enrich_similarity_match_texts(
@@ -883,7 +871,7 @@ def render_instruction_precheck_html(
     <p>{html_module.escape(data["message"])}</p>
     <p><strong>Corpus:</strong> {data["corpus_count"]} instructions ·
        <strong>Embedding:</strong> {html_module.escape(embed_status)} ({html_module.escape(data["embed_model"])}) ·
-       <strong>Flag rules:</strong> both ≥ {data["dual_threshold_percent"]}% OR meaning ≥ {data["semantic_block_threshold_percent"]}%</p>
+       <strong>Block threshold:</strong> {data["semantic_block_threshold_percent"]}% similarity</p>
   </div>
 
   <h2>Similarity scores (top matches)</h2>

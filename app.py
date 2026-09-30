@@ -296,8 +296,8 @@ with tab_instruction:
                 (st.error if pre_result.get("blocked") else st.success)(f"### {verdict_msg}")
                 st.caption(
                     f"Checked {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · "
-                    f"trainer {trainer_name or 'not given'} · compared with {corpus_count} Tela tasks · "
-                    f"limit {MEANING_BLOCK_PCT}% · keep this screenshot for your Tela submission"
+                    f"trainer {trainer_name or 'not given'} · {corpus_count} tasks in Tela · "
+                    f"screenshot for your Tela submission"
                 )
 
                 if pre_result.get("notes"):
