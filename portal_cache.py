@@ -29,7 +29,7 @@ def cached_load_similarity_corpus(
     instruction_col_index: int,
     corpus_json_path: str,
 ) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, str]], list[str]]:
-    from qc_engine import load_similarity_corpus
+    from similarity_service import load_similarity_corpus
 
     return load_similarity_corpus(
         sheet_url=sheet_url,
@@ -100,7 +100,7 @@ def tracker_cache_params(
     instruction_col: str = "",
     spec_col: str = "",
     trainer_col: str = "",
-    instruction_col_index: int = 16,
+    instruction_col_index: int = 7,
     corpus_json_path: str = "",
 ) -> dict[str, Any]:
     return {

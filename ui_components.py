@@ -13,8 +13,8 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "1.0"
-PRODUCT_NAME = "Terminus Edition-2"
+APP_VERSION = "3.0"
+PRODUCT_NAME = "Terminus 3"
 PRODUCT_TAGLINE = "Task Quality Checker"
 
 
@@ -268,7 +268,7 @@ def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
     logo_html = (
         f'<img src="{favicon_uri}" alt="Terminal Bench" class="t-logo-img" />'
         if favicon_uri
-        else '<div class="t-logo">T2</div>'
+        else '<div class="t-logo">T3</div>'
     )
     st.markdown(
         f"""
@@ -282,7 +282,7 @@ def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
   </div>
   <div class="t-badge-row">
     <span class="t-badge">Terminal-Bench</span>
-    <span class="t-badge">3-layer QC</span>
+    <span class="t-badge">T3 panel rehearsal</span>
     {llm_badge}
   </div>
 </div>
@@ -297,8 +297,9 @@ def render_hero() -> None:
 <div class="t-hero">
   <h2>Pre-submission quality gate for trainer tasks</h2>
   <p>Run <strong>instruction similarity</strong> or <strong>full task QC</strong> independently.
-  Full assessment checks folder structure first, then static rules, similarity, and LLM alignment
-  against <strong>8 accepted reference tasks</strong>.</p>
+  Full task QC follows the Terminus 3 pipeline: CI and preflight rules, similarity against the team
+  corpus, then an LLM rehearsal of the quality gate, the <code>stb</code> LLMaJ checks and the
+  five-axis <strong>quality panel</strong>, with the same blocking rules.</p>
 </div>
 """,
         unsafe_allow_html=True,

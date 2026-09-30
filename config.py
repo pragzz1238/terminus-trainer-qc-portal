@@ -155,7 +155,7 @@ def resolve_sheet_defaults() -> dict[str, str]:
             "task_col": str(sheet.get("task_col", "") or DEFAULT_TASK_COL),
             "instruction_col": str(sheet.get("instruction_col", "") or DEFAULT_INSTRUCTION_COL),
             "trainer_col": str(sheet.get("trainer_col", "") or DEFAULT_TRAINER_COL),
-            "instruction_col_index": str(sheet.get("instruction_col_index", "16")),
+            "instruction_col_index": str(sheet.get("instruction_col_index", "7")),
             "spec_col": str(sheet.get("spec_col", "")),
         }
         return {k: v for k, v in merged.items() if v}
@@ -165,7 +165,7 @@ def resolve_sheet_defaults() -> dict[str, str]:
         "task_col": os.environ.get("QC_SHEET_TASK_COL", DEFAULT_TASK_COL),
         "instruction_col": os.environ.get("QC_SHEET_INSTRUCTION_COL", DEFAULT_INSTRUCTION_COL),
         "trainer_col": os.environ.get("QC_SHEET_TRAINER_COL", DEFAULT_TRAINER_COL),
-        "instruction_col_index": os.environ.get("QC_SHEET_INSTRUCTION_COL_INDEX", "16"),
+        "instruction_col_index": os.environ.get("QC_SHEET_INSTRUCTION_COL_INDEX", "7"),
         "spec_col": os.environ.get("QC_SHEET_SPEC_COL", ""),
     }
 

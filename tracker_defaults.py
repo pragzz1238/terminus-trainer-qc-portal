@@ -8,18 +8,20 @@ from __future__ import annotations
 
 # From Apps Script: SPREADSHEET_ID, DATA_SHEET, TASK_INSTRUCTION_*
 TRACKER_SPREADSHEET_ID = "1XR_EFXtUt4GQ_d6zlkPT4arZi-BG-zFGHx4ctSSG51s"
-TRACKER_WORKSHEET = "May 1st - 31st"
+TRACKER_WORKSHEET = "Task Instructions"
 
 TRACKER_SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{TRACKER_SPREADSHEET_ID}/edit"
 )
 
-# Column headers (row 1) — 1-based column numbers from Apps Script row layout
-TRACKER_COL_TRAINER = 1          # A — Trainer Name
-TRACKER_COL_TASK_ID = 2          # B — Task ID (UUID)
-TRACKER_COL_TASK_STATUS = 3      # C
-TRACKER_COL_TASK_NAME = 4        # D — Task Name
-TRACKER_COL_TASK_INSTRUCTION = 16  # P — "Task Instruction"
+# Column headers (row 1) on the dedicated Task Instructions tab
+#   A Task ID | B Task name | C Trainer Name | D Task Status |
+#   E Language | F Domain | G Task Instruction | H Source
+TRACKER_COL_TRAINER = 3          # C — Trainer Name
+TRACKER_COL_TASK_ID = 1          # A — Task ID (UUID)
+TRACKER_COL_TASK_STATUS = 4      # D
+TRACKER_COL_TASK_NAME = 2        # B — Task Name
+TRACKER_COL_TASK_INSTRUCTION = 7  # G — "Task Instruction"
 
 TASK_INSTRUCTION_HEADER = "Task Instruction"
 

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tracker_defaults import TRACKER_SHEET_URL, TRACKER_WORKSHEET, TRACKER_COL_TASK_INSTRUCTION
-from qc_engine import (
+from similarity_service import (
     check_instruction_similarity,
     enrich_similarity_match_texts,
     fetch_similarity_corpus,

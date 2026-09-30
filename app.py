@@ -1,4 +1,4 @@
-"""Terminus Trainer QC Portal — professional UI, admin secrets, LLM-first QC."""
+"""Terminus 3 trainer QC portal: instruction similarity, full task QC, rubric check."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from tracker_defaults import (
 from ui_components import (
     inject_global_css,
     inject_page_favicon,
-    llm_verdict_label,
     render_download_panel,
     render_panel_header,
     render_footer,
@@ -31,9 +30,7 @@ from ui_components import (
     render_similarity_instruction_reviews,
     render_similarity_match_table,
     render_topbar,
-    render_verdict_banner,
     render_section_header,
-    severity_badge,
 )
 
 APP_DIR = Path(__file__).resolve().parent
@@ -74,7 +71,7 @@ def _instruction_review_tracker_maps(
     task_col: str = "",
     instruction_col: str = "",
     trainer_col: str = "",
-    instruction_col_index: int = 16,
+    instruction_col_index: int = 7,
     corpus_json_path: str = "",
 ) -> dict[str, str]:
     """Tracker instruction text for side-by-side review, with live corpus fallback."""
@@ -124,9 +121,9 @@ def _instruction_review_tracker_maps(
 
 @st.cache_resource(show_spinner=False)
 def _qc_engine():
-    import qc_engine
+    import similarity_service
 
-    return qc_engine
+    return similarity_service
 
 
 st.set_page_config(
@@ -178,19 +175,19 @@ with meta_right:
         st.warning("LLM judge unavailable — configure API key in deployment secrets.")
 
 with st.expander("Assessment settings", expanded=False):
-    run_llm = st.checkbox("Run LLM alignment judge (primary)", value=True, disabled=not llm_ready)
+    run_llm = st.checkbox("Run the LLM review (quality gate, LLMaJ, quality panel)", value=True, disabled=not llm_ready)
     if sheet_preconfigured:
         st.caption(
-            f"Similarity source: **Terminus Task Tracker** · tab "
+            f"Similarity source: **Terminus Task Instructions** · tab "
             f'`{sheet_defaults.get("worksheet", "")}` · col '
-            f'**{sheet_defaults.get("instruction_col", "Task Instruction")}** (column 16)'
+            f'**{sheet_defaults.get("instruction_col", "Task Instruction")}** (column 7)'
         )
         sheet_url = sheet_defaults.get("url", "")
         worksheet = sheet_defaults.get("worksheet", "")
         task_col = sheet_defaults.get("task_col", "")
         instruction_col = sheet_defaults.get("instruction_col", "")
         trainer_col = sheet_defaults.get("trainer_col", "")
-        instruction_col_index = int(sheet_defaults.get("instruction_col_index", "16") or "16")
+        instruction_col_index = int(sheet_defaults.get("instruction_col_index", "7") or "7")
         spec_col = sheet_defaults.get("spec_col", "")
         use_local_corpus = False
     else:
@@ -205,13 +202,13 @@ with st.expander("Assessment settings", expanded=False):
                 "Task Instruction column", value=sheet_defaults.get("instruction_col", "")
             )
             trainer_col = sheet_defaults.get("trainer_col", "")
-            instruction_col_index = int(sheet_defaults.get("instruction_col_index", "16") or "16")
+            instruction_col_index = int(sheet_defaults.get("instruction_col_index", "7") or "7")
             spec_col = st.text_input("SPEC column", value=sheet_defaults.get("spec_col", ""))
         use_local_corpus = st.checkbox("Fallback to bundled corpus", value=True)
 
 corpus_path = str(DEFAULT_CORPUS) if use_local_corpus and DEFAULT_CORPUS.exists() else ""
 
-tab_instruction, tab_full_qc = st.tabs(["Instruction similarity", "Full task QC"])
+tab_instruction, tab_full_qc, tab_rubric = st.tabs(["Instruction similarity", "Full task QC", "Rubric check"])
 
 with tab_instruction:
     with st.container(border=True):
@@ -405,332 +402,249 @@ with tab_full_qc:
     with st.container(border=True):
         render_panel_header(
             1,
-            "Upload task archive",
-            f"Terminal-Bench submission zip at archive root — do NOT include rubrics.txt here "
-            f"(upload rubrics separately below). Maximum {MAX_ZIP_MB} MB.",
+            "Full task QC (Terminus 3)",
+            "Upload the submission zip: task.toml, instruction.md, environment/, solution/ and tests/ at the "
+            f"top level, no rubrics.txt or README.md. Maximum {MAX_ZIP_MB} MB.",
         )
         uploaded = st.file_uploader(
             f"Task zip file (max {MAX_ZIP_MB} MB)",
             type=["zip"],
             max_upload_size=MAX_ZIP_MB,
         )
+        qc_rubric = st.text_area(
+            "Rubric (optional): the text you will paste in the platform or pass with `stb ... -r rubric.txt`",
+            height=110,
+            placeholder="Agent reads the evidence before writing code, +2\nAgent edits files under /tests, -5",
+            key="qc_rubric",
+        )
 
     if uploaded is None:
-        st.info("Upload a task zip to run full assessment.")
+        st.info("Upload a task zip to run the full Terminus 3 review.")
     elif uploaded.size > MAX_ZIP_BYTES:
-        st.error(
-            f"Zip file is too large ({_format_size(uploaded.size)}). "
-            f"Maximum is {MAX_ZIP_MB} MB."
-        )
+        st.error(f"Zip file is too large ({_format_size(uploaded.size)}). Maximum is {MAX_ZIP_MB} MB.")
     else:
-        with st.container(border=True):
-            render_panel_header(
-                1,
-                "Rubrics (separate upload)",
-                "rubrics.txt is entered in the Snorkel platform textbox at submission — not inside the zip. "
-                "Each line: starts with Agent, ends with , +/-N (1/2/3/5). Positive sum 10–40, ≥3 negatives, no ±4.",
-            )
-            rubric_file = st.file_uploader(
-                "Upload rubrics.txt (optional, max 1 MB)",
-                type=["txt"],
-                key="rubric_only",
-                max_upload_size=1,
-            )
-            rubric_text_area = st.text_area(
-                "Or paste rubrics.txt content",
-                value=st.session_state.get("rubric_pre_text", ""),
-                height=120,
-                placeholder="Agent completes X correctly, +3\nAgent leaks solution paths, -5\n…",
-            )
-            rubric_text = rubric_text_area.strip()
-            if rubric_file is not None:
-                rubric_text = rubric_file.getvalue().decode("utf-8", errors="replace").strip()
-            st.session_state.rubric_pre_text = rubric_text
-
-        upload_sig = f"{uploaded.name}:{uploaded.size}:{hash(rubric_text)}"
-        if (
-            st.session_state.qc_cache
-            and st.session_state.qc_cache.get("upload_sig") != upload_sig
-        ):
+        upload_sig = f"{uploaded.name}:{uploaded.size}:{hash(qc_rubric)}:{run_llm}"
+        if st.session_state.qc_cache and st.session_state.qc_cache.get("upload_sig") != upload_sig:
             st.session_state.qc_cache = None
-
-        with st.container(border=True):
-            render_panel_header(
-                1,
-                "Run assessment",
-                "Order: folder structure → static checks → similarity → LLM alignment (skipped if structure fails).",
-            )
-            render_metric_grid([
-                ("Archive", uploaded.name, "neutral"),
-                ("Size", f"{uploaded.size / 1024:.0f} KB", "neutral"),
-                ("References", "8 accepted", "neutral"),
-            ])
-            run_qc = st.button("Run full QC assessment", type="primary", use_container_width=True)
+        render_metric_grid([
+            ("Archive", uploaded.name, "neutral"),
+            ("Size", _format_size(uploaded.size), "neutral"),
+            ("LLM review", "on" if (run_llm and llm_ready) else "off", "neutral"),
+        ])
+        run_qc = st.button("Run full QC", type="primary", use_container_width=True)
 
         if run_qc:
-            qe = _qc_engine()
-            progress = st.progress(0, text="Starting assessment…")
-            status = st.empty()
+            import t3_review
+            from config import build_openai_client, resolve_llm_parallel_workers
 
-            def llm_progress(current: int, total: int, label: str, model: str) -> None:
-                pct = int((current - 1) / total * 80) + 15
-                progress.progress(
-                    min(pct, 95),
-                    text=f"LLM alignment {current}/{total} done — {label} ({model})…",
+            qe = _qc_engine()
+            bar = st.progress(0, text="Starting…")
+
+            def _progress(label: str, frac: float) -> None:
+                bar.progress(min(max(frac, 0.0), 1.0), text=label)
+
+            def _similarity(text: str) -> dict:
+                return qe.check_instruction_similarity(
+                    instruction_text=text,
+                    sheet_url=sheet_url,
+                    worksheet=worksheet,
+                    task_col=task_col,
+                    instruction_col=instruction_col,
+                    trainer_col=trainer_col,
+                    instruction_col_index=instruction_col_index,
+                    corpus_json_path=corpus_path if not sheet_url.strip() else "",
+                    api_key=resolve_openai_api_key(),
                 )
 
-            progress.progress(3, text="Checking task folder structure and static rules…")
-
-            with status.container():
-                with st.spinner(
-                    "Running assessment — structure & static first, then similarity, then LLM alignment…"
-                ):
-                    with tempfile.TemporaryDirectory(prefix="terminus_qc_") as tmp:
-                        report, _ = qe.assess_task(
-                            zip_bytes=uploaded.getvalue(),
-                            zip_name=uploaded.name,
-                            trainer_name=trainer_name,
-                            rubric_text=rubric_text,
-                            sheet_url=sheet_url,
-                            worksheet=worksheet,
-                            task_col=task_col,
-                            instruction_col=instruction_col,
-                            spec_col=spec_col,
-                            trainer_col=trainer_col,
-                            instruction_col_index=instruction_col_index,
-                            corpus_json_path=corpus_path if not sheet_url.strip() else "",
-                            openai_api_key=resolve_openai_api_key(),
-                            run_llm=run_llm and llm_ready,
-                            work_dir=Path(tmp),
-                            on_llm_progress=llm_progress,
-                        )
-
-            progress.progress(100, text="Done!")
-            status.empty()
-
-            safe_name = report.task_name.replace(" ", "-")
-            st.session_state.qc_cache = {
-                "upload_sig": upload_sig,
-                "report": report,
-                "safe_name": safe_name,
-            }
+            client = build_openai_client(resolve_openai_api_key()) if (run_llm and llm_ready) else None
+            try:
+                with tempfile.TemporaryDirectory(prefix="t3qc_") as tmp:
+                    review = t3_review.run_review(
+                        uploaded.getvalue(),
+                        uploaded.name,
+                        Path(tmp),
+                        rubric_text=qc_rubric,
+                        similarity_fn=_similarity,
+                        client=client,
+                        model=llm_model,
+                        run_llm=bool(client),
+                        parallel=resolve_llm_parallel_workers(10),
+                        on_progress=_progress,
+                    )
+            except Exception as exc:
+                bar.empty()
+                st.error("The review could not run on this archive.")
+                st.exception(exc)
+            else:
+                bar.empty()
+                st.session_state.qc_cache = {"upload_sig": upload_sig, "review": review}
 
         cache = st.session_state.qc_cache
-        show_results = False
-        if run_qc:
-            show_results = True
-        elif cache and cache.get("upload_sig") == upload_sig:
-            show_results = True
-            report = cache["report"]
-            safe_name = cache["safe_name"]
+        if cache and cache.get("upload_sig") == upload_sig and cache.get("review") is not None:
+            import t3_prompts
+            import t3_review
 
-        if show_results:
-            if run_qc:
-                report = st.session_state.qc_cache["report"]
-                safe_name = st.session_state.qc_cache["safe_name"]
+            review = cache["review"]
+            verdict, reasons = review.verdict()
+            if verdict == "READY TO UPLOAD":
+                st.success(f"**{verdict}** · " + " ".join(reasons))
+            elif verdict in ("STATIC ONLY", "INCOMPLETE"):
+                st.warning(f"**{verdict}** · " + " ".join(reasons))
+            else:
+                st.error(f"**{verdict}**")
+                for r in reasons:
+                    st.markdown(f"- {r}")
 
-            qe = _qc_engine()
-            report_json = json.dumps(qe.report_to_dict(report), indent=2)
-            report_html = qe.render_html_report(report)
-
-            render_section_header(
-                2,
-                "Assessment results",
-                "Structure checked before LLM. Summary of static checks, similarity, and LLM alignment.",
-            )
-
-            if report.instruction_blocked:
-                st.error(report.instruction_block_message or qe.CHANGE_TASK_MESSAGE)
-
-            hint = ""
-            if not report.structure_pass:
-                hint = (
-                    "Fix task folder structure first — LLM alignment was skipped until "
-                    "required files are present."
-                )
-            elif report.llm_results and not report.overall_pass and report.llm_pass is False:
-                hint = "LLM alignment is the primary gate — address alignment gaps before resubmitting."
-            render_verdict_banner(report.overall_pass, hint)
-
-            inst_tone = "fail" if report.instruction_blocked else "pass"
-            llm_val = "SKIPPED" if not report.llm_results else ("PASS" if report.llm_pass else "FAIL")
-            llm_tone = "neutral" if not report.llm_results else ("pass" if report.llm_pass else "fail")
-            static_tone = "pass" if report.static_pass else "fail"
-
+            panel_block = review.axis_blocking()
             render_metric_grid([
-                ("Task", report.task_name, "neutral"),
-                ("Structure", "OK" if report.structure_pass else "FAIL", "pass" if report.structure_pass else "fail"),
-                ("Rubrics", "OK" if report.rubric_pass else "REVIEW", "pass" if report.rubric_pass else "warn"),
-                ("Instruction", "BLOCK" if report.instruction_blocked else "OK", inst_tone),
-                ("LLM alignment", llm_val, llm_tone),
-                ("Static", "PASS" if report.static_pass else "FAIL", static_tone),
+                ("Task", review.task_name, "neutral"),
+                ("Static / CI", f"{review.static.get('errors', 0)} err · {review.static.get('warnings', 0)} warn",
+                 "fail" if review.static.get("errors") else ("warn" if review.static.get("warnings") else "pass")),
+                ("Similarity", "BLOCK" if review.similarity_blocked() else ("OK" if review.similarity else "n/a"),
+                 "fail" if review.similarity_blocked() else "pass"),
+                ("LLMaJ", "—" if not review.llm_ran else f"{len(review.llmaj_failures())} fail",
+                 "neutral" if not review.llm_ran else ("fail" if review.llmaj_failures() else "pass")),
+                ("Quality gate", "—" if not review.llm_ran else f"{len(review.gate_failures())} fail",
+                 "neutral" if not review.llm_ran else ("fail" if review.gate_failures() else "pass")),
+                ("Quality panel", "—" if not review.llm_ran else ("BLOCK" if panel_block else "clear"),
+                 "neutral" if not review.llm_ran else ("fail" if panel_block else "pass")),
             ])
 
+            report_html = t3_review.render_html(review)
+            report_json = json.dumps(t3_review.to_dict(review), indent=2, default=str)
+            safe = review.task_name.replace(" ", "-")
             render_download_panel(
-                report_html,
-                report_json,
-                f"{safe_name}_qc_report.html",
-                f"{safe_name}_qc_report.json",
+                report_html, report_json, f"{safe}_t3_qc.html", f"{safe}_t3_qc.json",
                 title="Full QC report",
-                subtitle=(
-                    "HTML for human review · JSON with LLM gaps, similarity scores, and static diagnostics."
-                ),
-                key_prefix="dl_qc_main",
+                subtitle="Every finding with file:line citations, the obligation list and the gate results.",
+                key_prefix="dl_t3",
             )
 
-            tab_llm, tab_similarity, tab_static, tab_details = st.tabs(
-                ["LLM Alignment (primary)", "Instruction Similarity", "Static Checks", "Report summary"]
-            )
-
-            with tab_llm:
-                if not report.llm_results:
-                    if not report.structure_pass:
-                        st.info(
-                            "LLM alignment skipped — fix folder structure first "
-                            "(required files at zip root)."
-                        )
-                    elif not (run_llm and llm_ready):
-                        st.info("LLM judge was not run. Enable it in settings or configure the API key.")
-                    else:
-                        st.info("LLM judge did not produce results.")
-                else:
-                    from alignment_prompts import ALIGNMENT_LABELS
-
-                    for key, item in report.llm_results.items():
-                        if not isinstance(item, dict):
-                            continue
-                        verdict = item.get("verdict", "UNKNOWN")
-                        if verdict == "SKIPPED":
-                            continue
-                        label = item.get("label", ALIGNMENT_LABELS.get(key, key))
-                        score = item.get("alignment_score", "—")
-
-                        with st.container(border=True):
-                            st.markdown(f"#### {label}")
-                            st.markdown(
-                                f"{llm_verdict_label(verdict)} &nbsp; "
-                                f'<span style="color:#64748b;font-size:0.9rem;">Score {score}/100</span>',
-                                unsafe_allow_html=True,
-                            )
-                            st.markdown(item.get("reasoning", ""))
-
-                            ref_comps = item.get("reference_comparisons", [])
-                            if isinstance(ref_comps, list) and ref_comps:
-                                st.markdown("**Per-reference comparison (all 8 accepted tasks):**")
-                                st.dataframe(
-                                    [
-                                        {
-                                            "Reference": r.get("reference_task", ""),
-                                            "Structure": r.get("structural_alignment", "—"),
-                                            "Differentiation": r.get("differentiation_score", "—"),
-                                            "Too similar": r.get("too_similar", False),
-                                            "Issues": "; ".join(r.get("issues", [])[:2]),
-                                        }
-                                        for r in ref_comps
-                                        if isinstance(r, dict)
-                                    ],
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
-
-                            gaps = item.get("gaps", [])
-                            if isinstance(gaps, list) and gaps:
-                                gap_data = []
-                                for gap in gaps:
-                                    if isinstance(gap, dict):
-                                        gap_data.append({
-                                            "File": gap.get("file", "—"),
-                                            "Issue": gap.get("issue", ""),
-                                            "Fix": gap.get("fix", ""),
-                                        })
-                                    elif isinstance(gap, str) and gap:
-                                        gap_data.append({"File": "—", "Issue": gap, "Fix": ""})
-                                if gap_data:
-                                    st.dataframe(gap_data, use_container_width=True, hide_index=True)
-
-                            flags = [
-                                (k, item[k])
-                                for k in (
-                                    "hardcoded_solution", "instruction_leaks_rules", "unused_hash_checks",
-                                    "bypass_possible", "copy_paste_risk", "too_similar_to_existing",
-                                )
-                                if item.get(k) is True
-                            ]
-                            if flags:
-                                st.warning("Flags: " + ", ".join(k for k, _ in flags))
-
-            with tab_similarity:
-                st.caption(SIMILARITY_TAB_HELP)
-                if report.instruction_matches:
-                    st.markdown("**instruction.md vs team tracker sheet**")
-                    render_similarity_match_table(report.instruction_matches)
-                    render_similarity_instruction_reviews(
-                        report.submitted_instruction,
-                        report.instruction_matches,
-                        key_prefix="qc_sim",
-                        tracker_instructions={
-                            m.task_id: m.matched_instruction for m in report.instruction_matches
-                        },
-                    )
-                if report.spec_matches:
-                    st.markdown("**SPEC.md matches (secondary)**")
+            t_static, t_sim, t_panel, t_gate, t_llmaj, t_inst, t_obl = st.tabs([
+                "Static / CI", "Similarity", "Quality panel", "Quality gate", "LLMaJ", "Instruction & difficulty", "Obligations",
+            ])
+            with t_static:
+                st.caption("The CI and preflight rules that can be decided by reading files (vendored from the "
+                           "team's taskkit static checker). ERROR blocks at CI; WARN must be fixed or justified.")
+                for n in review.layout_notes:
+                    st.error(n)
+                rows = [f for f in review.static.get("findings", []) if f["severity"] != "INFO"]
+                if rows:
                     st.dataframe(
-                        [
-                            {"Task": m.task_id, "Score %": round(m.score * 100, 1)}
-                            for m in report.spec_matches
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
+                        [{"Severity": f["severity"], "Code": f["code"], "Where": f["where"],
+                          "Finding": f["message"], "Rule": f["source"]} for f in rows],
+                        use_container_width=True, hide_index=True,
                     )
-                if not report.instruction_matches and not report.spec_matches:
-                    st.info("No similarity results — configure a Google Sheet or enable local corpus.")
-
-            with tab_static:
-                st.caption(
-                    "Structure first. Rubrics validated from separate upload (not in zip). "
-                    "Terminus static rules: unpinned FROM, large bookworm bases, COPY tests/ or "
-                    "solution/, offline pytest + ctrf in Dockerfile, leakage strings in "
-                    "instruction.md or test_outputs.py, test imports of solution/."
-                )
-                if not report.static_issues:
-                    st.success("All static checks passed.")
                 else:
-                    for issue in report.static_issues:
-                        st.markdown(
-                            f"{severity_badge(issue.severity)} &nbsp; {issue.message}",
-                            unsafe_allow_html=True,
+                    st.success("No static errors or warnings.")
+                with st.expander("Info-level notes"):
+                    for f in review.static.get("findings", []):
+                        if f["severity"] == "INFO":
+                            st.write(f"- `{f['code']}` {f['where']}: {f['message']}")
+            with t_sim:
+                sim = review.similarity
+                if not sim:
+                    st.info("Similarity did not run (no instruction.md or no corpus).")
+                else:
+                    (st.error if sim.get("blocked") else st.success)(sim.get("message", ""))
+                    if sim.get("matches"):
+                        render_similarity_match_table(sim["matches"])
+                        render_similarity_instruction_reviews(
+                            review.instruction_text, sim["matches"], key_prefix="t3_sim",
+                            tracker_instructions={m.task_id: m.matched_instruction for m in sim["matches"]},
                         )
-                        if issue.fix_hint:
-                            st.caption(f"Fix: {issue.fix_hint}")
+            with t_panel:
+                if not review.llm_ran:
+                    st.info("The LLM review did not run.")
+                st.caption("Five axes, each reviewed on the split view the platform uses. Minor or Major blocks on "
+                           "every axis except protected_ground_truth, where only Major blocks. Advisory never blocks.")
+                for key, axis in t3_prompts.AXES.items():
+                    res = review.axes.get(key)
+                    if not res:
+                        continue
+                    blocks = res["verdict"] in axis["blocks_on"]
+                    with st.container(border=True):
+                        st.markdown(f"#### `{key}` · **{res['verdict']}**{' · blocks' if blocks else ''}")
+                        st.caption(f"View: {axis['view']}")
+                        st.write(res.get("summary", ""))
+                        for i, f in enumerate(res.get("findings", []), 1):
+                            st.markdown(f"**{i}. ({f.get('severity')}) {f.get('title', '')}**")
+                            st.write(f.get("mechanism", ""))
+                            st.caption(f"Cited: {', '.join(f.get('citations') or [])} · Fix: {f.get('fix', '')}")
+            with t_gate:
+                st.caption("The 29 public Terminal-Bench quality criteria the platform runs before the panel. "
+                           "`difficult` is advisory in returned payloads; treat every other failure as blocking.")
+                if review.gate:
+                    st.dataframe(
+                        [{"Criterion": c.get("name"), "Result": c.get("result"),
+                          "Reasoning": c.get("reasoning")} for c in sorted(review.gate, key=lambda c: c.get("result") != "fail")],
+                        use_container_width=True, hide_index=True,
+                    )
+            with t_llmaj:
+                st.caption("The seven LLM-as-judge checks in `stb harbor check`.")
+                if review.llmaj:
+                    st.dataframe(
+                        [{"Check": c.get("name"), "Result": c.get("result"), "Reasoning": c.get("reasoning")}
+                         for c in review.llmaj],
+                        use_container_width=True, hide_index=True,
+                    )
+            with t_inst:
+                if review.instruction:
+                    ins = review.instruction
+                    st.markdown(f"**Instruction:** {ins.get('verdict')} · AI-text risk **{ins.get('ai_text_risk')}**")
+                    st.write(ins.get("summary", ""))
+                    for i in ins.get("issues", []):
+                        st.markdown(f"- [{i.get('severity')}] {i.get('issue')} ({i.get('where')}). Fix: {i.get('fix')}")
+                if review.difficulty:
+                    d = review.difficulty
+                    st.markdown(f"**Expertise floor:** {d.get('expertise_floor')} · **Difficulty risk:** "
+                                f"{d.get('difficulty_risk')} · **difficulty_explanation:** {d.get('explanation_quality')}")
+                    st.write(f"Crux: {d.get('crux')}")
+                    st.write(d.get("reasoning", ""))
+                    for s in d.get("suggestions", []):
+                        st.markdown(f"- {s}")
+            with t_obl:
+                ob = (review.obligations or {}).get("obligations", [])
+                st.caption("Every normative sentence becomes an obligation the reference must satisfy and a visible "
+                           "test must exercise. Anything here with no test is a sound_verifier finding waiting to happen.")
+                if ob:
+                    st.dataframe(
+                        [{"Id": o.get("id"), "Kind": o.get("kind"), "Core": o.get("core"),
+                          "Obligation": o.get("text"), "Source": o.get("citation")} for o in ob],
+                        use_container_width=True, hide_index=True,
+                    )
+            if review.errors:
+                with st.expander("Run notes"):
+                    for e in review.errors:
+                        st.write(f"- {e}")
 
-            with tab_details:
-                st.markdown("#### Report at a glance")
-                st.caption(
-                    "Accepted reference tasks may still fail LLM alignment or show high tracker similarity "
-                    "(e.g. matching their own row). Full downloads are in the panel above the tabs."
-                )
-                summary = qe.report_to_dict(report)
-                st.json({
-                    "overall_pass": summary["overall_pass"],
-                    "task_name": summary["task_name"],
-                    "static_pass": summary["static_checks"]["pass"],
-                    "similarity_pass": summary["similarity"]["pass"],
-                    "llm_pass": summary["llm_judge"]["pass"],
-                    "issue_count": len(summary["static_checks"]["issues"]),
-                })
-                render_download_panel(
-                    report_html,
-                    report_json,
-                    f"{safe_name}_qc_report.html",
-                    f"{safe_name}_qc_report.json",
-                    title="Download again",
-                    subtitle="Same report files as the panel above.",
-                    key_prefix="dl_qc_tab",
-                )
+with tab_rubric:
+    with st.container(border=True):
+        render_panel_header(
+            2,
+            "Rubric check",
+            "Rules as of 23 Sep 2026: one line per criterion, `Agent …, ±N`, N any integer from 1 to 5 (never 0), "
+            "an explicit + on positives, at least one negative, positives summing to 10 to 40, and no mention of "
+            "tests, task.toml or instruction.md.",
+        )
+        rubric_text = st.text_area("Paste the rubric", height=200, key="rubric_tab_text")
+        if st.button("Check rubric", type="primary", use_container_width=True, key="rubric_btn"):
+            import t3_static
 
-            if report.notes:
-                with st.expander("Technical notes"):
-                    for note in report.notes:
-                        st.write(f"- {note}")
+            if not rubric_text.strip():
+                st.error("Paste a rubric first.")
+            else:
+                with tempfile.TemporaryDirectory() as d:
+                    rp = Path(d) / "rubric.txt"
+                    rp.write_text(rubric_text)
+                    rep = t3_static.Report()
+                    t3_static.check_rubric(rp, rep)
+                errs = [f for f in rep.findings if f["severity"] == "ERROR"]
+                warns = [f for f in rep.findings if f["severity"] == "WARN"]
+                (st.error if errs else (st.warning if warns else st.success))(
+                    f"{len(errs)} error(s), {len(warns)} warning(s)")
+                for f in rep.findings:
+                    where = f["where"].replace(str(rp), "rubric")
+                    st.markdown(f"- **{f['severity']}** `{f['code']}` {where}: {f['message']}")
 
 render_footer()

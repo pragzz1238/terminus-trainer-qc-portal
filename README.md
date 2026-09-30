@@ -58,12 +58,17 @@ Plus sheet block:
 ```toml
 [sheet]
 url = "https://docs.google.com/spreadsheets/d/1XR_EFXtUt4GQ_d6zlkPT4arZi-BG-zFGHx4ctSSG51s/edit"
-worksheet = "May 1st - 31st"
+worksheet = "Task Instructions"
 task_col = "Task name"
 instruction_col = "Task Instruction"
 trainer_col = "Trainer Name"
-instruction_col_index = "16"
+instruction_col_index = "7"
 ```
+
+The `Task Instructions` tab is a dedicated corpus built by Apps Script
+(`App_scripts/TaskInstructions.gs` → `rebuildTaskInstructionsSheet()` /
+`syncTelaInstructionsToSheet()`). It only contains rows that have instruction
+text (from the main tracker and/or Tela submissions).
 
 5. Deploy → share the public URL with trainers
 
