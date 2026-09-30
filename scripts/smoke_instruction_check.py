@@ -104,7 +104,7 @@ def main() -> int:
         top = matches[0]
         print(
             f"Top match: {top.task_id} "
-            f"(word {round((top.lexical_score or 0) * 100)}%, "
+            f"(cosine {round((top.lexical_score or 0) * 100)}%, "
             f"meaning {round((top.semantic_score or 0) * 100) if top.semantic_score is not None else '—'}%)"
         )
     return 0

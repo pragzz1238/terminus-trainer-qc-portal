@@ -39,12 +39,12 @@ SIM_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
 MEANING_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
 INSTRUCTION_CHECK_HELP = (
     f"Compares your instruction with every task already in Tela (submitted, rework, approved, rejected). "
-    f"If word overlap or meaning reaches {MEANING_BLOCK_PCT}% with any of them, the task cannot be uploaded. "
-    f"Take a screenshot of the result: Tela asks for it when you submit."
+    f"Uses TF-IDF cosine similarity on the full instruction text, plus embedding cosine when the API key is set. "
+    f"Upload is blocked at {MEANING_BLOCK_PCT}% on either score. Screenshot the result for Tela submit."
 )
 SIMILARITY_TAB_HELP = (
-    f"Your zip's instruction.md compared with every task in Tela; {MEANING_BLOCK_PCT}% or more on word overlap "
-    f"or meaning blocks the upload. Open 👁 review to compare full instructions."
+    f"instruction.md vs every task in Tela; cosine similarity ≥ {MEANING_BLOCK_PCT}% blocks upload. "
+    f"Open 👁 review to compare full instructions side by side."
 )
 MAX_INSTRUCTION_MD_MB = 5
 MAX_ZIP_MB = 200
@@ -177,7 +177,7 @@ with st.expander("Assessment settings", expanded=False):
     run_llm = st.checkbox("Run the LLM review (quality gate, LLMaJ, quality panel)", value=True, disabled=not llm_ready)
     st.caption(
         f"Similarity source: **Tela** only, read live (tasks in submitted, rework, approved or rejected). "
-        f"Upload blocked at {MEANING_BLOCK_PCT}% word overlap or meaning."
+        f"Upload blocked at {MEANING_BLOCK_PCT}% TF-IDF cosine or embedding cosine."
     )
     # The sheet is no longer a similarity source; these stay empty for the engine's signatures.
     sheet_url = worksheet = task_col = instruction_col = trainer_col = spec_col = ""
@@ -269,7 +269,7 @@ with tab_instruction:
                 elif not pre_result.get("api_key_present") and not llm_ready:
                     st.warning(
                         "Meaning check did not run — add `OPENAI_API_KEY` in Streamlit Cloud secrets. "
-                        "Only word-overlap was checked."
+                        "Only TF-IDF cosine was checked (no embeddings)."
                     )
                 elif not pre_result.get("api_key_present"):
                     st.warning("API key missing for meaning check (full zip QC may still work).")

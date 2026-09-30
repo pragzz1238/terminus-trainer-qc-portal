@@ -84,7 +84,7 @@ def similarity_flag_label(match: SimilarityMatch) -> str:
     if match.block_reason == "meaning":
         return f"YES (meaning ≥{SEMANTIC_BLOCK_PCT}%)"
     if match.block_reason == "words":
-        return f"YES (word overlap ≥{DUAL_BLOCK_PCT}%)"
+        return f"YES (cosine ≥{DUAL_BLOCK_PCT}%)"
     return "YES"
 
 
@@ -637,28 +637,28 @@ def run_instruction_similarity(
         reason_note = (
             f"meaning ≥ {SEMANTIC_BLOCK_PCT}%"
             if top.block_reason == "meaning"
-            else f"word overlap ≥ {DUAL_BLOCK_PCT}%"
+            else f"cosine similarity ≥ {DUAL_BLOCK_PCT}%"
         )
         block_message = (
             f"{CHANGE_TASK_MESSAGE} Closest match: {top.task_id}"
             f" (trainer: {top.trainer or 'unknown'}) — "
-            f"word overlap {round(top.lexical_score * 100)}%, "
-            f"meaning {round((top.semantic_score or 0) * 100)}% "
+            f"cosine {round(top.lexical_score * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}% "
             f"({reason_note}). Use 👁 review below to compare instructions."
         )
         notes.append(block_message)
     elif hits and sim_meta.embedding_ran:
         top = hits[0]
         notes.append(
-            f"Top match — word overlap {round(top.lexical_score * 100)}%, "
-            f"meaning {round((top.semantic_score or 0) * 100)}% "
+            f"Top match — cosine {round(top.lexical_score * 100)}%, "
+            f"embedding {round((top.semantic_score or 0) * 100)}% "
             f"(upload blocked at {SEMANTIC_BLOCK_PCT}%)"
         )
     elif hits:
         top = hits[0]
         notes.append(
-            f"Top match — word overlap {round(top.lexical_score * 100)}% only "
-            f"(meaning check unavailable)"
+            f"Top match — cosine {round(top.lexical_score * 100)}% only "
+            f"(embedding check unavailable)"
         )
 
     return inst_matches, blocked, block_message, notes, run_meta
@@ -725,7 +725,7 @@ def check_instruction_similarity(
         pass_message = (f"CAN UPLOAD: no tasks have been submitted in Tela yet, so there is nothing to be "
                         f"similar to (upload blocked at {SEMANTIC_BLOCK_PCT}%).")
     elif not run_meta.get("embedding_ran"):
-        pass_message = (f"CAN UPLOAD on word overlap ({top_pct}% at most, limit {SEMANTIC_BLOCK_PCT}%), but the meaning "
+        pass_message = (f"CAN UPLOAD on cosine similarity ({top_pct}% at most, limit {SEMANTIC_BLOCK_PCT}%), but the embedding "
                         "check did not run. Ask the admin to fix the API key and check again before uploading.")
         blocked = True
     else:

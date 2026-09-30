@@ -1,6 +1,7 @@
-"""Instruction similarity — lexical + embedding run in parallel.
+"""Instruction similarity — TF-IDF cosine + embedding cosine in parallel.
 
-Block rule: word overlap OR meaning >= 85% against any task in Tela.
+Block when instruction-level cosine similarity OR embedding cosine >= threshold
+against any task in Tela (not naive word-set overlap).
 """
 
 from __future__ import annotations
@@ -71,18 +72,29 @@ def lexical_similarity(a: str, b: str) -> float:
     return (2 * intersect) / (len(x_set) + len(y_set))
 
 
+def _format_embedding_error(exc: BaseException) -> str:
+    msg = str(exc).strip()
+    lower = msg.lower()
+    if "archived" in lower or "not_authorized_invalid_project" in lower:
+        return (
+            f"{msg} — Update Streamlit secrets: use an API key from an active OpenAI project, "
+            "or set OPENROUTER_API_KEY (embeddings use openai/text-embedding-3-small on OpenRouter)."
+        )
+    return msg
+
+
 def evaluate_similarity_block(
     lexical_score: float,
     semantic_score: float | None,
     dual_threshold: float = INSTRUCTION_SIM_THRESHOLD,
     semantic_block_threshold: float = INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
 ) -> tuple[bool, str]:
-    """Return (flagged, reason): flagged when meaning OR word overlap reaches the upload limit
-    (85%). reason is 'meaning', 'words' or ''."""
+    """Return (flagged, reason). lexical_score is TF-IDF cosine on full instruction text.
+    reason is 'meaning', 'cosine', or ''."""
     if semantic_score is not None and semantic_score >= semantic_block_threshold:
         return True, "meaning"
     if lexical_score >= dual_threshold:
-        return True, "words"
+        return True, "cosine"
     return False, ""
 
 
@@ -134,17 +146,43 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _compute_tfidf_cosine_scores(
+    query: str,
+    candidates: list[tuple[str, dict[str, str]]],
+) -> dict[str, float]:
+    """Cosine similarity between query and each corpus instruction (TF-IDF vectors)."""
+    q = (query or "").strip()
+    if not q:
+        return {}
+    keys: list[str] = []
+    docs: list[str] = []
+    for key, meta in candidates:
+        inst = (meta.get("instruction") or "").strip()
+        if not inst:
+            continue
+        keys.append(key)
+        docs.append(inst)
+    if not docs:
+        return {}
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        max_features=5000,
+        lowercase=True,
+        strip_accents="unicode",
+    )
+    corpus_vectors = vectorizer.fit_transform(docs)
+    query_vector = vectorizer.transform([q])
+    similarities = cosine_similarity(query_vector, corpus_vectors).flatten()
+    return {keys[i]: float(max(0.0, similarities[i])) for i in range(len(keys))}
+
+
 def _compute_lexical_scores(
     query: str,
     candidates: list[tuple[str, dict[str, str]]],
 ) -> dict[str, float]:
-    scores: dict[str, float] = {}
-    for key, meta in candidates:
-        inst = meta.get("instruction", "")
-        if not inst.strip():
-            continue
-        scores[key] = lexical_similarity(query, inst)
-    return scores
+    """Primary instruction similarity: TF-IDF cosine (not Dice word overlap)."""
+    return _compute_tfidf_cosine_scores(query, candidates)
 
 
 def _compute_semantic_scores(
@@ -219,9 +257,8 @@ def compare_instruction_to_corpus_full(
     tracker_cache: dict[str, Any] | None = None,
 ) -> SimilarityCompareResult:
     """
-    Run lexical and embedding similarity in parallel against the full corpus.
+    Run TF-IDF cosine and embedding cosine in parallel against the full corpus.
     Always returns top-N rows with both scores visible (even below threshold).
-    dual_block=True when dual >= 60% OR meaning >= 70%.
     """
     from config import resolve_embed_model, resolve_openai_api_key
 
@@ -265,7 +302,7 @@ def compare_instruction_to_corpus_full(
             if not embedding_ran:
                 embedding_error = "Embedding API returned no scores."
         except Exception as exc:
-            embedding_error = str(exc)
+            embedding_error = _format_embedding_error(exc)
             semantic_scores = {}
     else:
         embedding_error = "No OPENAI_API_KEY configured in Streamlit secrets."
@@ -276,14 +313,14 @@ def compare_instruction_to_corpus_full(
         lex = lexical_scores.get(key, 0.0)
         sem = semantic_scores.get(key)
         flagged, reason = evaluate_similarity_block(lex, sem, threshold)
-        if reason == "words":
-            method = "words-85"
+        if reason == "cosine":
+            method = "cosine-85"
         elif reason == "meaning":
             method = "meaning-85"
         elif sem is not None and sem >= threshold:
             method = "semantic-high"
         elif lex >= threshold:
-            method = "lexical-only"
+            method = "cosine-only"
         else:
             method = "below-threshold"
         hits.append(

@@ -444,8 +444,8 @@ def _similarity_flag_label(match: Any) -> str:
         return "No"
     if reason == "meaning":
         return "YES · meaning ≥85%"
-    if reason == "words":
-        return "YES · word overlap ≥85%"
+    if reason == "cosine" or reason == "words":
+        return "YES · cosine ≥85%"
     return "YES"
 
 
@@ -495,8 +495,8 @@ def render_similarity_match_table(matches: list[Any]) -> None:
             {
                 "Task": m.task_id,
                 "Trainer": m.trainer or "—",
-                "Word overlap %": round((m.lexical_score or 0) * 100, 1),
-                "Meaning %": (
+                "Cosine similarity %": round((m.lexical_score or 0) * 100, 1),
+                "Embedding cosine %": (
                     round(m.semantic_score * 100, 1)
                     if m.semantic_score is not None else "—"
                 ),
@@ -536,7 +536,7 @@ def render_similarity_instruction_reviews(
         )
         sem_s = f"{sem}%" if sem is not None else "—"
         lex = round((m.lexical_score or 0) * 100, 1)
-        labels.append(f"👁 {m.task_id} · meaning {sem_s} · word {lex}% · {_similarity_flag_label(m)}")
+        labels.append(f"👁 {m.task_id} · embed {sem_s} · cosine {lex}% · {_similarity_flag_label(m)}")
 
     pick = st.selectbox(
         "Tracker match to compare",
@@ -579,7 +579,7 @@ def render_similarity_instruction_reviews(
                 )
                 st.markdown(
                     f"- **{other.task_id}** · meaning {sem}% · "
-                    f"word {round((other.lexical_score or 0) * 100, 1)}% · "
+                    f"cosine {round((other.lexical_score or 0) * 100, 1)}% · "
                     f"{_similarity_flag_label(other)}"
                 )
 

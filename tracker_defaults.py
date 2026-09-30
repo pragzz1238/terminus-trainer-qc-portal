@@ -25,8 +25,8 @@ TRACKER_COL_TASK_INSTRUCTION = 7  # G — "Task Instruction"
 
 TASK_INSTRUCTION_HEADER = "Task Instruction"
 
-# Upload limit (set 2026-09-30): a task cannot be uploaded when its instruction is 85% or more
-# similar to any task already in Tela, by word overlap OR by meaning.
+# Upload limit: block when TF-IDF cosine similarity OR embedding cosine on the full
+# instruction text is >= 85% vs any task already in Tela.
 UPLOAD_BLOCK_THRESHOLD = 0.85
 INSTRUCTION_SIM_THRESHOLD = UPLOAD_BLOCK_THRESHOLD
 INSTRUCTION_LEXICAL_GATE = INSTRUCTION_SIM_THRESHOLD
