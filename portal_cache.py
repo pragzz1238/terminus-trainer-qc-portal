@@ -18,7 +18,7 @@ def corpus_text_signature(keys_and_texts: list[tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_load_similarity_corpus(
     sheet_url: str,
     worksheet: str,

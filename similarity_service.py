@@ -449,6 +449,51 @@ def _rank_similarity(
     return ranked[:top_n]
 
 
+DEFAULT_TELA_INSTRUCTIONS_URL = "https://tela.cognyzer.com/api/sync/instructions"
+
+
+def tela_settings() -> tuple[str, str]:
+    """(url, token) for Tela's instruction corpus, from Streamlit secrets or the environment."""
+    import os
+
+    try:
+        import streamlit as st
+
+        secrets = dict(st.secrets)
+    except Exception:
+        secrets = {}
+    token = str(secrets.get("TELA_SYNC_TOKEN", "") or os.environ.get("TELA_SYNC_TOKEN", "")).strip()
+    url = str(secrets.get("TELA_INSTRUCTIONS_URL", "") or os.environ.get("TELA_INSTRUCTIONS_URL", "")
+              or DEFAULT_TELA_INSTRUCTIONS_URL).strip()
+    return url, token
+
+
+def load_reference_from_tela() -> tuple[dict[str, str], dict[str, dict[str, str]], list[str]]:
+    """Instructions trainers recorded in Tela (submitted, rework, approved, rejected), read live
+    from GET /api/sync/instructions. Keyed by task name, like the sheet."""
+    import requests
+
+    url, token = tela_settings()
+    if not token:
+        return {}, {}, ["Tela not configured (no TELA_SYNC_TOKEN in secrets): Tela instructions were not loaded."]
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    if resp.status_code != 200:
+        return {}, {}, [f"Tela instructions API returned {resp.status_code}: {resp.text[:200]}"]
+    rows = resp.json().get("rows", [])
+    instructions: dict[str, str] = {}
+    meta: dict[str, dict[str, str]] = {}
+    for r in rows:
+        text = (r.get("instruction") or "").strip()
+        key = (r.get("task_name") or r.get("external_id") or r.get("source_id") or "").strip()
+        if not text or not key:
+            continue
+        instructions[key] = text
+        meta[key] = {"instruction": text, "trainer": r.get("trainer_email") or "", "task_name": key,
+                     "status": r.get("tela_status") or "", "source": "Tela"}
+    return instructions, meta, [f"Tela: {len(instructions)} instructions loaded live "
+                                f"(statuses submitted, rework, approved, rejected)."]
+
+
 def load_similarity_corpus(
     sheet_url: str = "",
     worksheet: str = "",
@@ -484,6 +529,17 @@ def load_similarity_corpus(
                 )
         except Exception as exc:
             notes.append(f"Google Sheet load failed: {exc}")
+
+    try:
+        tela_instr, tela_meta, tela_notes = load_reference_from_tela()
+        notes.extend(tela_notes)
+        added = sum(1 for k in tela_instr if k not in instructions)
+        instructions.update(tela_instr)   # Tela wins over the sheet copy of the same task
+        corpus_meta.update(tela_meta)
+        if tela_instr:
+            notes.append(f"Merged Tela into the corpus: {added} new, {len(tela_instr) - added} replacing sheet rows.")
+    except Exception as exc:
+        notes.append(f"Tela instructions load failed: {exc}")
 
     if not instructions:
         fallback_path = Path(corpus_json_path) if corpus_json_path else BUNDLED_CORPUS_PATH
