@@ -38,14 +38,13 @@ DEFAULT_CORPUS = APP_DIR / "terminus_task_corpus.json"
 SIM_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
 MEANING_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
 INSTRUCTION_CHECK_HELP = (
-    f"Compare your instruction against the team tracker. Flagged when "
-    f"word overlap and meaning are both ≥ {SIM_PCT}%, or meaning alone ≥ {MEANING_BLOCK_PCT}%. "
-    f"Use 👁 review to read both prompts side-by-side."
+    f"Compares your instruction with every task already in Tela (submitted, rework, approved, rejected). "
+    f"If word overlap or meaning reaches {MEANING_BLOCK_PCT}% with any of them, the task cannot be uploaded. "
+    f"Take a screenshot of the result: Tela asks for it when you submit."
 )
 SIMILARITY_TAB_HELP = (
-    f"Compared from your zip's instruction.md against the team tracker. "
-    f"Flagged when both ≥ {SIM_PCT}% or meaning ≥ {MEANING_BLOCK_PCT}%. "
-    f"Open 👁 review to compare full instructions."
+    f"Your zip's instruction.md compared with every task in Tela; {MEANING_BLOCK_PCT}% or more on word overlap "
+    f"or meaning blocks the upload. Open 👁 review to compare full instructions."
 )
 MAX_INSTRUCTION_MD_MB = 5
 MAX_ZIP_MB = 200
@@ -176,35 +175,14 @@ with meta_right:
 
 with st.expander("Assessment settings", expanded=False):
     run_llm = st.checkbox("Run the LLM review (quality gate, LLMaJ, quality panel)", value=True, disabled=not llm_ready)
-    if sheet_preconfigured:
-        st.caption(
-            f"Similarity source: **Terminus Task Instructions** · tab "
-            f'`{sheet_defaults.get("worksheet", "")}` · col '
-            f'**{sheet_defaults.get("instruction_col", "Task Instruction")}** (column 7)'
-        )
-        sheet_url = sheet_defaults.get("url", "")
-        worksheet = sheet_defaults.get("worksheet", "")
-        task_col = sheet_defaults.get("task_col", "")
-        instruction_col = sheet_defaults.get("instruction_col", "")
-        trainer_col = sheet_defaults.get("trainer_col", "")
-        instruction_col_index = int(sheet_defaults.get("instruction_col_index", "7") or "7")
-        spec_col = sheet_defaults.get("spec_col", "")
-        use_local_corpus = False
-    else:
-        st.markdown("**Similarity sheet** — ask admin to configure in secrets")
-        s1, s2 = st.columns(2)
-        with s1:
-            sheet_url = st.text_input("Google Sheet URL", value=sheet_defaults.get("url", ""))
-            worksheet = st.text_input("Worksheet tab", value=sheet_defaults.get("worksheet", ""))
-        with s2:
-            task_col = st.text_input("Task Name column", value=sheet_defaults.get("task_col", ""))
-            instruction_col = st.text_input(
-                "Task Instruction column", value=sheet_defaults.get("instruction_col", "")
-            )
-            trainer_col = sheet_defaults.get("trainer_col", "")
-            instruction_col_index = int(sheet_defaults.get("instruction_col_index", "7") or "7")
-            spec_col = st.text_input("SPEC column", value=sheet_defaults.get("spec_col", ""))
-        use_local_corpus = st.checkbox("Fallback to bundled corpus", value=True)
+    st.caption(
+        f"Similarity source: **Tela** only, read live (tasks in submitted, rework, approved or rejected). "
+        f"Upload blocked at {MEANING_BLOCK_PCT}% word overlap or meaning."
+    )
+    # The sheet is no longer a similarity source; these stay empty for the engine's signatures.
+    sheet_url = worksheet = task_col = instruction_col = trainer_col = spec_col = ""
+    instruction_col_index = 7
+    use_local_corpus = False
 
 corpus_path = str(DEFAULT_CORPUS) if use_local_corpus and DEFAULT_CORPUS.exists() else ""
 
@@ -259,7 +237,7 @@ with tab_instruction:
         else:
             qe = _qc_engine()
             try:
-                with st.spinner("Comparing your instruction against the team tracker…"):
+                with st.spinner("Comparing your instruction with every task in Tela…"):
                     pre_result = qe.check_instruction_similarity(
                         instruction_text=instruction_text,
                         sheet_url=sheet_url,
@@ -284,7 +262,7 @@ with tab_instruction:
                 if pre_result.get("embedding_ran"):
                     st.info(
                         f"Meaning check completed ({pre_result.get('api_provider', 'OpenAI')}) "
-                        f"against **{pre_result.get('corpus_size', 0)}** tracker instructions."
+                        f"against **{pre_result.get('corpus_size', 0)}** Tela instructions."
                     )
                 elif pre_result.get("embedding_error"):
                     st.warning(f"Meaning check did not run: {pre_result['embedding_error']}")
@@ -297,24 +275,24 @@ with tab_instruction:
                     st.warning("API key missing for meaning check (full zip QC may still work).")
                 else:
                     st.warning(
-                        "Meaning check did not complete — see **Sheet load details** and download the report below."
+                        "Meaning check did not complete — see **Tela load details** and download the report below."
                     )
 
                 corpus_count = pre_result.get("corpus_count", 0) or pre_result.get("corpus_size", 0)
-                if corpus_count:
-                    st.caption(f"Compared against **{corpus_count}** reference instructions.")
+                from datetime import datetime, timezone
+
+                verdict_msg = pre_result.get("message") or qe.CHANGE_TASK_MESSAGE
+                (st.error if pre_result.get("blocked") else st.success)(f"### {verdict_msg}")
+                st.caption(
+                    f"Checked {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · "
+                    f"trainer {trainer_name or 'not given'} · compared with {corpus_count} Tela tasks · "
+                    f"limit {MEANING_BLOCK_PCT}% · keep this screenshot for your Tela submission"
+                )
 
                 if pre_result.get("notes"):
-                    with st.expander("Sheet load details", expanded=corpus_count == 0):
+                    with st.expander("Tela load details", expanded=corpus_count == 0):
                         for note in pre_result["notes"]:
                             st.write(f"- {note}")
-
-                if pre_result.get("blocked"):
-                    st.error(pre_result.get("message") or qe.CHANGE_TASK_MESSAGE)
-                elif corpus_count == 0:
-                    st.error(pre_result.get("message", "No reference corpus loaded."))
-                else:
-                    st.success(pre_result.get("message", "Instruction check passed."))
 
                 if pre_result.get("matches"):
                     tracker_maps = _instruction_review_tracker_maps(

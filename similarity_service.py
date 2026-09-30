@@ -41,8 +41,8 @@ SEMANTIC_BLOCK_PCT = int(INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD * 100)
 DUAL_BLOCK_PCT = int(INSTRUCTION_SIM_THRESHOLD * 100)
 BUNDLED_CORPUS_PATH = Path(__file__).resolve().parent / "terminus_task_corpus.json"
 CHANGE_TASK_MESSAGE = (
-    "Change the task — your instruction is too similar to an existing one "
-    f"(word overlap and meaning both ≥ {DUAL_BLOCK_PCT}%, or meaning ≥ {SEMANTIC_BLOCK_PCT}%)."
+    f"CANNOT UPLOAD: this instruction is {SEMANTIC_BLOCK_PCT}% or more similar to a task already in Tela. "
+    "Change the task before uploading."
 )
 
 TASK_REQUIRED_FILES: dict[str, str] = {
@@ -83,8 +83,8 @@ def similarity_flag_label(match: SimilarityMatch) -> str:
         return "No"
     if match.block_reason == "meaning":
         return f"YES (meaning ≥{SEMANTIC_BLOCK_PCT}%)"
-    if match.block_reason == "dual":
-        return f"YES (both ≥{DUAL_BLOCK_PCT}%)"
+    if match.block_reason == "words":
+        return f"YES (word overlap ≥{DUAL_BLOCK_PCT}%)"
     return "YES"
 
 
@@ -504,61 +504,11 @@ def load_similarity_corpus(
     instruction_col_index: int = TRACKER_COL_TASK_INSTRUCTION,
     corpus_json_path: str = "",
 ) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, str]], list[str]]:
-    """Load tracker sheet or local JSON for instruction similarity."""
-    notes: list[str] = []
-    instructions: dict[str, str] = {}
-    specs: dict[str, str] = {}
-    corpus_meta: dict[str, dict[str, str]] = {}
-
-    if sheet_url.strip():
-        try:
-            instructions, specs, corpus_meta, sheet_notes = load_reference_from_sheet(
-                sheet_url,
-                worksheet=worksheet,
-                task_col=task_col,
-                instruction_col=instruction_col,
-                spec_col=spec_col,
-                trainer_col=trainer_col,
-                instruction_col_index=instruction_col_index,
-            )
-            notes.extend(sheet_notes)
-            if not instructions:
-                notes.append(
-                    "Tracker sheet loaded but column 'Task Instruction' (P) has no text "
-                    f'on tab "{worksheet or "default"}".'
-                )
-        except Exception as exc:
-            notes.append(f"Google Sheet load failed: {exc}")
-
-    try:
-        tela_instr, tela_meta, tela_notes = load_reference_from_tela()
-        notes.extend(tela_notes)
-        added = sum(1 for k in tela_instr if k not in instructions)
-        instructions.update(tela_instr)   # Tela wins over the sheet copy of the same task
-        corpus_meta.update(tela_meta)
-        if tela_instr:
-            notes.append(f"Merged Tela into the corpus: {added} new, {len(tela_instr) - added} replacing sheet rows.")
-    except Exception as exc:
-        notes.append(f"Tela instructions load failed: {exc}")
-
-    if not instructions:
-        fallback_path = Path(corpus_json_path) if corpus_json_path else BUNDLED_CORPUS_PATH
-        if fallback_path.exists():
-            instructions, specs, json_notes = load_reference_from_json(fallback_path)
-            corpus_meta = {
-                k: {"instruction": v, "trainer": "", "task_name": k}
-                for k, v in instructions.items()
-            }
-            notes.extend(json_notes)
-            notes.append(
-                f"Using bundled local corpus ({len(instructions)} tasks) — "
-                "tracker sheet unavailable or empty."
-            )
-        elif not notes:
-            notes.append("No similarity reference — configure tracker sheet in admin secrets.")
-
-    return instructions, specs, corpus_meta, notes
-
+    """The similarity corpus is Tela only: every task trainers have submitted there (statuses
+    submitted, rework, approved, rejected), read live. The sheet and bundled JSON arguments are kept
+    for call compatibility and ignored."""
+    instructions, corpus_meta, notes = load_reference_from_tela()
+    return instructions, {}, corpus_meta, notes
 
 def fetch_similarity_corpus(
     sheet_url: str = "",
@@ -687,7 +637,7 @@ def run_instruction_similarity(
         reason_note = (
             f"meaning ≥ {SEMANTIC_BLOCK_PCT}%"
             if top.block_reason == "meaning"
-            else f"both word overlap and meaning ≥ {DUAL_BLOCK_PCT}%"
+            else f"word overlap ≥ {DUAL_BLOCK_PCT}%"
         )
         block_message = (
             f"{CHANGE_TASK_MESSAGE} Closest match: {top.task_id}"
@@ -702,7 +652,7 @@ def run_instruction_similarity(
         notes.append(
             f"Top match — word overlap {round(top.lexical_score * 100)}%, "
             f"meaning {round((top.semantic_score or 0) * 100)}% "
-            f"(flagged when both ≥ {DUAL_BLOCK_PCT}% or meaning ≥ {SEMANTIC_BLOCK_PCT}%)"
+            f"(upload blocked at {SEMANTIC_BLOCK_PCT}%)"
         )
     elif hits:
         top = hits[0]
@@ -726,7 +676,8 @@ def check_instruction_similarity(
     exclude_task_name: str = "",
     api_key: str = "",
 ) -> dict[str, Any]:
-    """Standalone instruction.md check — runs before zip upload."""
+    """Instruction check against Tela, run before upload. The result message starts with CAN UPLOAD,
+    CANNOT UPLOAD or CANNOT CONFIRM, for the screenshot trainers attach when they submit."""
     from portal_cache import tracker_cache_params
 
     tracker_cache = tracker_cache_params(
@@ -759,33 +710,28 @@ def check_instruction_similarity(
     )
     notes = load_notes + notes
 
+    tela_ok = any(n.startswith("Tela: ") for n in load_notes)
+    top = matches[0] if matches else None
+    top_pct = 0
+    if top is not None:
+        top_pct = round(max(top.lexical_score or 0, top.semantic_score or 0) * 100)
     if blocked:
         pass_message = block_message
-    elif run_meta.get("embedding_ran") and matches:
-        top = matches[0]
-        pass_message = (
-            f"Looks good — closest match has word overlap "
-            f"{round((top.lexical_score or 0) * 100)}% and meaning "
-            f"{round((top.semantic_score or 0) * 100)}% "
-            f"(flagged when both ≥ {DUAL_BLOCK_PCT}% or meaning ≥ {SEMANTIC_BLOCK_PCT}%)."
-        )
-    elif run_meta.get("embedding_ran"):
-        pass_message = (
-            "Meaning check ran but no close matches on the tracker."
-        )
-    elif matches:
-        pass_message = (
-            "Word-overlap check only — meaning check did not run. "
-            "Configure OPENAI_API_KEY in Streamlit secrets for the full comparison."
-        )
+    elif not tela_ok:
+        blocked = True
+        pass_message = ("CANNOT CONFIRM: Tela's instructions could not be loaded, so this instruction was not "
+                        "compared with anything. Do not upload on this result. " + " ".join(load_notes))
     elif not instructions:
-        sheet_errors = [n for n in load_notes if "failed" in n.lower() or "returned" in n.lower()]
-        pass_message = (
-            "No tracker instructions loaded to compare against. "
-            + (sheet_errors[0] if sheet_errors else "Check sheet sharing and tab name in secrets.")
-        )
+        pass_message = (f"CAN UPLOAD: no tasks have been submitted in Tela yet, so there is nothing to be "
+                        f"similar to (upload blocked at {SEMANTIC_BLOCK_PCT}%).")
+    elif not run_meta.get("embedding_ran"):
+        pass_message = (f"CAN UPLOAD on word overlap ({top_pct}% at most, limit {SEMANTIC_BLOCK_PCT}%), but the meaning "
+                        "check did not run. Ask the admin to fix the API key and check again before uploading.")
+        blocked = True
     else:
-        pass_message = "No similarity matches returned."
+        pass_message = (f"CAN UPLOAD: highest similarity to any of the {len(instructions)} tasks in Tela is "
+                        f"{top_pct}% (limit {SEMANTIC_BLOCK_PCT}%)"
+                        + (f", closest: {top.task_id}." if top is not None else "."))
 
     tracker_instructions = enrich_similarity_match_texts(
         matches,

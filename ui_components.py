@@ -297,8 +297,8 @@ def render_hero() -> None:
 <div class="t-hero">
   <h2>Pre-submission quality gate for trainer tasks</h2>
   <p>Run <strong>instruction similarity</strong> or <strong>full task QC</strong> independently.
-  Full task QC follows the Terminus 3 pipeline: CI and preflight rules, similarity against the team
-  corpus, then an LLM rehearsal of the quality gate, the <code>stb</code> LLMaJ checks and the
+  Full task QC follows the Terminus 3 pipeline: CI and preflight rules, similarity against every task in
+  Tela, then an LLM rehearsal of the quality gate, the <code>stb</code> LLMaJ checks and the
   five-axis <strong>quality panel</strong>, with the same blocking rules.</p>
 </div>
 """,
@@ -443,16 +443,16 @@ def _similarity_flag_label(match: Any) -> str:
     if not dual:
         return "No"
     if reason == "meaning":
-        return "YES · meaning ≥70%"
-    if reason == "dual":
-        return "YES · both ≥60%"
+        return "YES · meaning ≥85%"
+    if reason == "words":
+        return "YES · word overlap ≥85%"
     return "YES"
 
 
 def _render_full_instruction(text: str) -> None:
     safe = html_module.escape(text or "")
     if not safe.strip():
-        st.warning("No instruction text available — re-run the check to reload from the tracker.")
+        st.warning("No instruction text available — re-run the check to reload from Tela.")
         return
     st.markdown(f'<div class="t-instr-scroll">{safe}</div>', unsafe_allow_html=True)
 
@@ -523,7 +523,7 @@ def render_similarity_instruction_reviews(
 
     st.markdown("**👁 Compare full instructions**")
     st.caption(
-        "Select a tracker match below — both prompts show in full (scroll inside each panel)."
+        "Select a Tela match below — both prompts show in full (scroll inside each panel)."
     )
 
     options = list(range(min(len(matches), max_reviews)))

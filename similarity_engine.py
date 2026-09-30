@@ -1,8 +1,6 @@
 """Instruction similarity — lexical + embedding run in parallel.
 
-Block rules (same tracker row):
-- BOTH word overlap and meaning >= 60%, OR
-- meaning alone >= 70%.
+Block rule: word overlap OR meaning >= 85% against any task in Tela.
 """
 
 from __future__ import annotations
@@ -79,13 +77,12 @@ def evaluate_similarity_block(
     dual_threshold: float = INSTRUCTION_SIM_THRESHOLD,
     semantic_block_threshold: float = INSTRUCTION_SEMANTIC_BLOCK_THRESHOLD,
 ) -> tuple[bool, str]:
-    """Return (flagged, reason) where reason is '', 'dual', or 'meaning'."""
-    if semantic_score is None:
-        return False, ""
-    if lexical_score >= dual_threshold and semantic_score >= dual_threshold:
-        return True, "dual"
-    if semantic_score >= semantic_block_threshold:
+    """Return (flagged, reason): flagged when meaning OR word overlap reaches the upload limit
+    (85%). reason is 'meaning', 'words' or ''."""
+    if semantic_score is not None and semantic_score >= semantic_block_threshold:
         return True, "meaning"
+    if lexical_score >= dual_threshold:
+        return True, "words"
     return False, ""
 
 
@@ -279,10 +276,10 @@ def compare_instruction_to_corpus_full(
         lex = lexical_scores.get(key, 0.0)
         sem = semantic_scores.get(key)
         flagged, reason = evaluate_similarity_block(lex, sem, threshold)
-        if reason == "dual":
-            method = "dual-60"
+        if reason == "words":
+            method = "words-85"
         elif reason == "meaning":
-            method = "meaning-70"
+            method = "meaning-85"
         elif sem is not None and sem >= threshold:
             method = "semantic-high"
         elif lex >= threshold:
