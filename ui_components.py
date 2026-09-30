@@ -13,9 +13,9 @@ APP_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = APP_DIR / "favicon.png"
 if not FAVICON_PATH.is_file():
     FAVICON_PATH = APP_DIR / "favicon.ico"
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 PRODUCT_NAME = "Cognyzer"
-PRODUCT_TAGLINE = "Terminal Bench · Trainer QC"
+PRODUCT_TAGLINE = "Terminal Bench · check instructions before you submit on Tela"
 
 
 def inject_global_css() -> None:
@@ -41,14 +41,24 @@ def inject_global_css() -> None:
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--t-text);
     }
-    div[data-testid="stButton"] > button[kind="primary"] {
-        background: var(--t-brand-grad) !important;
-        border: none !important;
+    /* Streamlit primary actions — solid Cognyzer orange (overrides theme teal below) */
+    .stButton > button[kind="primary"],
+    div[data-testid="stButton"] > button[kind="primary"],
+    button[data-testid="stBaseButton-primary"] {
+        background: #ff5c33 !important;
+        background-color: #ff5c33 !important;
+        border: 1px solid #e54e2b !important;
         color: #fff !important;
         font-weight: 600 !important;
+        border-radius: 10px !important;
     }
-    div[data-testid="stButton"] > button[kind="primary"]:hover {
-        filter: brightness(1.05);
+    .stButton > button[kind="primary"]:hover,
+    div[data-testid="stButton"] > button[kind="primary"]:hover,
+    button[data-testid="stBaseButton-primary"]:hover {
+        background: #ff704d !important;
+        background-color: #ff704d !important;
+        border-color: #ff5c33 !important;
+        color: #fff !important;
     }
     .block-container {
         padding-top: 1.25rem;
@@ -70,8 +80,8 @@ def inject_global_css() -> None:
 
     .t-topbar {
         display: flex; align-items: center; justify-content: space-between;
-        background: var(--t-surface);
-        border: 1px solid var(--t-border);
+        background: #0a0616;
+        border: 1px solid #27272a;
         border-radius: 16px;
         padding: 1.1rem 1.35rem;
         margin-bottom: 1rem;
@@ -91,30 +101,17 @@ def inject_global_css() -> None:
         object-fit: contain; display: block;
         box-shadow: var(--t-shadow);
     }
-    .t-title { margin: 0; font-size: 1.35rem; font-weight: 700; color: var(--t-text); line-height: 1.2; }
-    .t-subtitle { margin: 0.15rem 0 0 0; color: var(--t-muted); font-size: 0.92rem; }
+    .t-title { margin: 0; font-size: 1.35rem; font-weight: 700; color: #fafafa; line-height: 1.2; }
+    .t-subtitle { margin: 0.15rem 0 0 0; color: #a1a1aa; font-size: 0.92rem; }
     .t-badge-row { display: flex; flex-wrap: wrap; gap: 0.45rem; justify-content: flex-end; }
     .t-badge {
         display: inline-flex; align-items: center; gap: 0.35rem;
         padding: 0.3rem 0.65rem; border-radius: 999px;
         font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
-        border: 1px solid var(--t-border); background: #f8fafc; color: #334155;
+        border: 1px solid #3f3f46; background: rgba(255,255,255,0.06); color: #e4e4e7;
     }
-    .t-badge.ok { background: var(--t-accent-soft); border-color: #fed7aa; color: #9a3412; }
-    .t-badge.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
-
-    .t-hero {
-        background: var(--t-surface);
-        border: 1px solid var(--t-border);
-        border-left: 4px solid transparent;
-        border-image: var(--t-brand-grad) 1;
-        border-radius: 16px;
-        padding: 1.25rem 1.4rem;
-        margin-bottom: 1.25rem;
-        box-shadow: var(--t-shadow);
-    }
-    .t-hero h2 { margin: 0 0 0.45rem 0; font-size: 1.05rem; color: var(--t-text); }
-    .t-hero p { margin: 0; color: var(--t-muted); font-size: 0.95rem; line-height: 1.55; }
+    .t-badge.ok { background: rgba(255, 92, 51, 0.15); border-color: rgba(255, 92, 51, 0.45); color: #fdba74; }
+    .t-badge.warn { background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.35); color: #fde68a; }
 
     .t-stepper {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem;
@@ -246,11 +243,6 @@ def inject_global_css() -> None:
         margin-bottom: 0.75rem;
         background: var(--t-surface);
     }
-    .stButton > button[kind="primary"] {
-        border-radius: 10px; font-weight: 600;
-        background: linear-gradient(180deg, #0f766e 0%, #115e59 100%);
-        border: 1px solid #0f766e;
-    }
 </style>
 """,
         unsafe_allow_html=True,
@@ -303,16 +295,8 @@ def render_topbar(llm_ready: bool, provider: str, model: str) -> None:
 
 
 def render_hero() -> None:
-    st.markdown(
-        """
-<div class="t-hero">
-  <h2>Pre-submission check for Terminal Bench tasks</h2>
-  <p>Compare your instruction to every task in <strong>Tela</strong>, or run full task QC
-  (rules, similarity, and LLM quality panel). Screenshot the similarity result when Tela asks for it.</p>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    """Intentionally minimal — intro lives in the dark top bar."""
+    return
 
 
 def render_workflow_stepper(active_step: int) -> None:

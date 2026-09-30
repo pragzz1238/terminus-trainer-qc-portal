@@ -147,8 +147,6 @@ if "instruction_pre_text" not in st.session_state:
     st.session_state.instruction_pre_text = ""
 if "qc_cache" not in st.session_state:
     st.session_state.qc_cache = None
-if "show_pre_downloads" not in st.session_state:
-    st.session_state.show_pre_downloads = False
 if "rubric_pre_text" not in st.session_state:
     st.session_state.rubric_pre_text = ""
 
@@ -255,7 +253,6 @@ with tab_instruction:
             else:
                 st.session_state.instruction_pre_text = instruction_text
                 st.session_state.instruction_pre_result = pre_result
-                st.session_state.show_pre_downloads = False
                 if pre_result.get("tracker_instructions"):
                     st.session_state.tracker_instruction_cache = pre_result["tracker_instructions"]
 
@@ -353,28 +350,25 @@ with tab_instruction:
                 key_prefix="pre_persist",
                 tracker_instructions=tracker_maps,
             )
-        if st.button("Prepare instruction report downloads", key="prep_pre_dl"):
-            st.session_state.show_pre_downloads = True
-        if st.session_state.get("show_pre_downloads"):
-            qe = _qc_engine()
-            pre_html = qe.render_instruction_precheck_html(
+        qe = _qc_engine()
+        pre_html = qe.render_instruction_precheck_html(
+            pre_result, st.session_state.instruction_pre_text, trainer_name
+        )
+        pre_json = json.dumps(
+            qe.instruction_precheck_to_dict(
                 pre_result, st.session_state.instruction_pre_text, trainer_name
-            )
-            pre_json = json.dumps(
-                qe.instruction_precheck_to_dict(
-                    pre_result, st.session_state.instruction_pre_text, trainer_name
-                ),
-                indent=2,
-            )
-            render_download_panel(
-                pre_html,
-                pre_json,
-                "instruction_precheck_report.html",
-                "instruction_precheck_report.json",
-                title="Instruction similarity report",
-                subtitle="From your most recent instruction check.",
-                key_prefix="dl_pre_persist",
-            )
+            ),
+            indent=2,
+        )
+        render_download_panel(
+            pre_html,
+            pre_json,
+            "instruction_precheck_report.html",
+            "instruction_precheck_report.json",
+            title="Download report",
+            subtitle="HTML for screenshot / JSON for records — from your last run.",
+            key_prefix="dl_pre_persist",
+        )
 
 with tab_full_qc:
     with st.container(border=True):
